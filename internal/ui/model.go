@@ -55,6 +55,7 @@ type Model struct {
 
 func NewModel(v *vault.Vault) Model {
 	ft := filetree.New(v)
+	ft.SetFocused(true)
 	ed := editor.New()
 	pv := preview.New()
 	sr := search.New(v)
@@ -73,14 +74,12 @@ func NewModel(v *vault.Vault) Model {
 		keys:       DefaultKeyMap(),
 		activePane: PaneFileTree,
 		viewMode:   ViewSplit,
+		statusMsg:  "Press ? for help",
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
-		tea.EnterAltScreen,
-		tea.EnableMouseCellMotion,
-	)
+	return nil
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -248,6 +247,9 @@ func (m *Model) updateLayout() {
 	}
 	statusHeight := 1
 	contentHeight := m.height - statusHeight - helpHeight - 1
+	if contentHeight < 5 {
+		contentHeight = 5
+	}
 
 	treeWidth := m.width / 4
 	if treeWidth < 20 {
@@ -258,6 +260,9 @@ func (m *Model) updateLayout() {
 	}
 
 	contentWidth := m.width - treeWidth - 2
+	if contentWidth < 20 {
+		contentWidth = 20
+	}
 
 	m.filetree.SetSize(treeWidth, contentHeight)
 

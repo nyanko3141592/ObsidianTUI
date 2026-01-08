@@ -6,6 +6,9 @@ obsidiantui
 *.so
 *.dylib
 
+# Build output
+dist/
+
 # Test binary
 *.test
 
