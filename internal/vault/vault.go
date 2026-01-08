@@ -5,15 +5,19 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/takahashinaoki/obsidiantui/internal/parser"
 )
 
 type Vault struct {
-	Path      string
-	Files     map[string]*File
-	Tags      map[string][]string
-	Backlinks map[string][]string
+	Path         string
+	Files        map[string]*File
+	Tags         map[string][]string
+	Backlinks    map[string][]string
+	indexed      bool
+	indexing     bool
+	mu           sync.RWMutex
 }
 
 type File struct {
@@ -48,21 +52,24 @@ func NewVault(path string) (*Vault, error) {
 		Backlinks: make(map[string][]string),
 	}
 
-	if err := v.Scan(); err != nil {
+	if err := v.ScanFiles(); err != nil {
 		return nil, err
 	}
+
+	go v.BuildIndexAsync()
 
 	return v, nil
 }
 
-func (v *Vault) Scan() error {
-	v.Files = make(map[string]*File)
-	v.Tags = make(map[string][]string)
-	v.Backlinks = make(map[string][]string)
+func (v *Vault) ScanFiles() error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 
-	err := filepath.Walk(v.Path, func(path string, info os.FileInfo, err error) error {
+	v.Files = make(map[string]*File)
+
+	return filepath.Walk(v.Path, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return err
+			return nil
 		}
 
 		name := info.Name()
@@ -89,66 +96,115 @@ func (v *Vault) Scan() error {
 			return nil
 		}
 
-		file := &File{
+		v.Files[relPath] = &File{
 			Path:         path,
 			Name:         name,
 			RelativePath: relPath,
 			IsDir:        false,
 		}
-		v.Files[relPath] = file
 
 		return nil
 	})
-
-	if err != nil {
-		return err
-	}
-
-	v.buildIndex()
-	return nil
 }
 
-func (v *Vault) buildIndex() {
-	contents := make(map[string]string)
+func (v *Vault) BuildIndexAsync() {
+	v.mu.Lock()
+	if v.indexing || v.indexed {
+		v.mu.Unlock()
+		return
+	}
+	v.indexing = true
+	v.mu.Unlock()
 
-	for relPath, file := range v.Files {
+	tags := make(map[string][]string)
+	backlinks := make(map[string][]string)
+
+	v.mu.RLock()
+	files := make(map[string]*File)
+	for k, f := range v.Files {
+		files[k] = f
+	}
+	v.mu.RUnlock()
+
+	for relPath, file := range files {
 		if file.IsDir {
 			continue
 		}
 
-		content, err := v.ReadFile(relPath)
+		content, err := os.ReadFile(file.Path)
 		if err != nil {
 			continue
 		}
-		contents[relPath] = content
 
-		file.Links = parser.ExtractAllLinks(content)
-		file.Tags = parser.ExtractUniqueTags(content)
+		contentStr := string(content)
+		links := parser.ExtractAllLinks(contentStr)
+		fileTags := parser.ExtractUniqueTags(contentStr)
 
-		for _, tag := range file.Tags {
-			v.Tags[tag] = append(v.Tags[tag], relPath)
+		v.mu.Lock()
+		if f, ok := v.Files[relPath]; ok {
+			f.Links = links
+			f.Tags = fileTags
 		}
-	}
+		v.mu.Unlock()
 
-	for relPath, file := range v.Files {
-		if file.IsDir {
-			continue
+		for _, tag := range fileTags {
+			tags[tag] = append(tags[tag], relPath)
 		}
 
-		for _, link := range file.Links {
+		for _, link := range links {
 			if link.IsWikiLink {
 				targetName := parser.ResolveWikiLink(link.Target, filepath.Dir(relPath), v.Path)
-				targetPath := v.FindFile(targetName)
+				targetPath := v.findFileInternal(files, targetName)
 				if targetPath != "" {
-					v.Backlinks[targetPath] = append(v.Backlinks[targetPath], relPath)
+					backlinks[targetPath] = append(backlinks[targetPath], relPath)
 				}
 			}
 		}
 	}
+
+	v.mu.Lock()
+	v.Tags = tags
+	v.Backlinks = backlinks
+	v.indexed = true
+	v.indexing = false
+	v.mu.Unlock()
+}
+
+func (v *Vault) findFileInternal(files map[string]*File, name string) string {
+	name = strings.ToLower(name)
+
+	for relPath := range files {
+		baseName := strings.ToLower(filepath.Base(relPath))
+		if baseName == name {
+			return relPath
+		}
+	}
+
+	for relPath := range files {
+		if strings.ToLower(relPath) == name {
+			return relPath
+		}
+	}
+
+	return ""
+}
+
+func (v *Vault) Scan() error {
+	if err := v.ScanFiles(); err != nil {
+		return err
+	}
+	v.mu.Lock()
+	v.indexed = false
+	v.mu.Unlock()
+	go v.BuildIndexAsync()
+	return nil
 }
 
 func (v *Vault) ReadFile(relPath string) (string, error) {
+	v.mu.RLock()
 	file, ok := v.Files[relPath]
+	v.mu.RUnlock()
+
 	if !ok {
 		return "", os.ErrNotExist
 	}
@@ -162,12 +218,18 @@ func (v *Vault) ReadFile(relPath string) (string, error) {
 		return "", err
 	}
 
+	v.mu.Lock()
 	file.Content = string(content)
+	v.mu.Unlock()
+
 	return file.Content, nil
 }
 
 func (v *Vault) WriteFile(relPath string, content string) error {
+	v.mu.RLock()
 	file, ok := v.Files[relPath]
+	v.mu.RUnlock()
+
 	if !ok {
 		return os.ErrNotExist
 	}
@@ -176,15 +238,20 @@ func (v *Vault) WriteFile(relPath string, content string) error {
 		return err
 	}
 
+	v.mu.Lock()
 	file.Content = content
 	file.Modified = false
 	file.Links = parser.ExtractAllLinks(content)
 	file.Tags = parser.ExtractUniqueTags(content)
+	v.mu.Unlock()
 
 	return nil
 }
 
 func (v *Vault) FindFile(name string) string {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
 	name = strings.ToLower(name)
 
 	for relPath := range v.Files {
@@ -204,22 +271,39 @@ func (v *Vault) FindFile(name string) string {
 }
 
 func (v *Vault) GetBacklinks(relPath string) []string {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
 	backlinks := v.Backlinks[relPath]
-	sort.Strings(backlinks)
-	return backlinks
+	result := make([]string, len(backlinks))
+	copy(result, backlinks)
+	sort.Strings(result)
+	return result
 }
 
 func (v *Vault) GetFilesWithTag(tag string) []string {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
 	files := v.Tags[tag]
-	sort.Strings(files)
-	return files
+	result := make([]string, len(files))
+	copy(result, files)
+	sort.Strings(result)
+	return result
 }
 
 func (v *Vault) Search(query string) []string {
+	v.mu.RLock()
+	files := make(map[string]*File)
+	for k, f := range v.Files {
+		files[k] = f
+	}
+	v.mu.RUnlock()
+
 	query = strings.ToLower(query)
 	var results []string
 
-	for relPath, file := range v.Files {
+	for relPath, file := range files {
 		if file.IsDir {
 			continue
 		}
@@ -253,18 +337,23 @@ func (v *Vault) CreateFile(relPath string) error {
 	}
 	f.Close()
 
+	v.mu.Lock()
 	v.Files[relPath] = &File{
 		Path:         fullPath,
 		Name:         filepath.Base(relPath),
 		RelativePath: relPath,
 		IsDir:        false,
 	}
+	v.mu.Unlock()
 
 	return nil
 }
 
 func (v *Vault) DeleteFile(relPath string) error {
+	v.mu.RLock()
 	file, ok := v.Files[relPath]
+	v.mu.RUnlock()
+
 	if !ok {
 		return os.ErrNotExist
 	}
@@ -273,6 +362,15 @@ func (v *Vault) DeleteFile(relPath string) error {
 		return err
 	}
 
+	v.mu.Lock()
 	delete(v.Files, relPath)
+	v.mu.Unlock()
+
 	return nil
+}
+
+func (v *Vault) IsIndexed() bool {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	return v.indexed
 }
