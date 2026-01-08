@@ -10,8 +10,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/takahashinaoki/obsidiantui/config"
 	"github.com/takahashinaoki/obsidiantui/internal/components/backlinks"
-	"github.com/takahashinaoki/obsidiantui/internal/components/editor"
 	"github.com/takahashinaoki/obsidiantui/internal/components/filetree"
+	"github.com/takahashinaoki/obsidiantui/internal/components/liveeditor"
 	"github.com/takahashinaoki/obsidiantui/internal/components/preview"
 	"github.com/takahashinaoki/obsidiantui/internal/components/search"
 	"github.com/takahashinaoki/obsidiantui/internal/vault"
@@ -36,7 +36,7 @@ const (
 type Model struct {
 	vault     *vault.Vault
 	filetree  filetree.Model
-	editor    editor.Model
+	editor    liveeditor.Model
 	preview   preview.Model
 	search    search.Model
 	backlinks backlinks.Model
@@ -56,7 +56,7 @@ type Model struct {
 func NewModel(v *vault.Vault) Model {
 	ft := filetree.New(v)
 	ft.SetFocused(true)
-	ed := editor.New()
+	ed := liveeditor.New()
 	pv := preview.New()
 	sr := search.New(v)
 	bl := backlinks.New(v)
@@ -73,8 +73,8 @@ func NewModel(v *vault.Vault) Model {
 		help:       h,
 		keys:       DefaultKeyMap(),
 		activePane: PaneFileTree,
-		viewMode:   ViewSplit,
-		statusMsg:  "Press ? for help",
+		viewMode:   ViewEdit,
+		statusMsg:  "Press ? for help | i:insert mode | Tab:switch pane",
 	}
 }
 
@@ -105,7 +105,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
-		if m.editor.Mode() == editor.ModeInsert {
+		if m.editor.InsertMode() {
 			var cmd tea.Cmd
 			m.editor, cmd = m.editor.Update(msg)
 			return m, cmd
@@ -180,10 +180,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case backlinks.BacklinksClosedMsg:
 		return m, nil
 
-	case editor.SaveRequestMsg:
+	case liveeditor.SaveRequestMsg:
 		return m, m.saveFile(msg.Path, msg.Content)
 
-	case editor.LinkFollowMsg:
+	case liveeditor.LinkFollowMsg:
 		return m, m.followLink(msg.Target)
 
 	case preview.LinkFollowMsg:
@@ -430,7 +430,7 @@ func (m Model) renderStatusBar() string {
 	left := StatusBarStyle.Render(" " + vaultName)
 
 	modeStr := "NORMAL"
-	if m.editor.Mode() == editor.ModeInsert {
+	if m.editor.InsertMode() {
 		modeStr = "INSERT"
 	}
 

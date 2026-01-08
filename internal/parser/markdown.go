@@ -8,6 +8,7 @@ import (
 
 type MarkdownRenderer struct {
 	renderer *glamour.TermRenderer
+	width    int
 }
 
 func NewMarkdownRenderer(width int) (*MarkdownRenderer, error) {
@@ -19,10 +20,16 @@ func NewMarkdownRenderer(width int) (*MarkdownRenderer, error) {
 		return nil, err
 	}
 
-	return &MarkdownRenderer{renderer: renderer}, nil
+	return &MarkdownRenderer{renderer: renderer, width: width}, nil
 }
 
 func (m *MarkdownRenderer) Render(content string) (string, error) {
+	content = RenderTeX(content)
+	return m.renderer.Render(content)
+}
+
+func (m *MarkdownRenderer) RenderWithTeX(content string) (string, error) {
+	content = RenderTeX(content)
 	return m.renderer.Render(content)
 }
 
