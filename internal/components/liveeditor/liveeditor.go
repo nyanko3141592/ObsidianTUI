@@ -4,75 +4,36 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/takahashinaoki/obsidiantui/internal/parser"
 )
 
 type Model struct {
-	lines      []string
-	cursorRow  int
-	cursorCol  int
-	offsetRow  int
-	filePath   string
-	modified   bool
-	width      int
-	height     int
-	focused    bool
-	renderer   *parser.MarkdownRenderer
-	links      []parser.Link
-	insertMode bool
-}
-
-type KeyMap struct {
-	Up         key.Binding
-	Down       key.Binding
-	Left       key.Binding
-	Right      key.Binding
-	Home       key.Binding
-	End        key.Binding
-	PageUp     key.Binding
-	PageDown   key.Binding
-	Enter      key.Binding
-	Backspace  key.Binding
-	Delete     key.Binding
-	Save       key.Binding
-	InsertMode key.Binding
-	NormalMode key.Binding
-	FollowLink key.Binding
-}
-
-var DefaultKeyMap = KeyMap{
-	Up:         key.NewBinding(key.WithKeys("up", "k")),
-	Down:       key.NewBinding(key.WithKeys("down", "j")),
-	Left:       key.NewBinding(key.WithKeys("left", "h")),
-	Right:      key.NewBinding(key.WithKeys("right", "l")),
-	Home:       key.NewBinding(key.WithKeys("home", "0")),
-	End:        key.NewBinding(key.WithKeys("end", "$")),
-	PageUp:     key.NewBinding(key.WithKeys("pgup", "ctrl+u")),
-	PageDown:   key.NewBinding(key.WithKeys("pgdown", "ctrl+d")),
-	Enter:      key.NewBinding(key.WithKeys("enter")),
-	Backspace:  key.NewBinding(key.WithKeys("backspace")),
-	Delete:     key.NewBinding(key.WithKeys("delete")),
-	Save:       key.NewBinding(key.WithKeys("ctrl+s")),
-	InsertMode: key.NewBinding(key.WithKeys("i", "a")),
-	NormalMode: key.NewBinding(key.WithKeys("esc")),
-	FollowLink: key.NewBinding(key.WithKeys("enter", "ctrl+]")),
+	lines       []string
+	cursorRow   int
+	cursorCol   int
+	offsetRow   int
+	filePath    string
+	modified    bool
+	width       int
+	height      int
+	focused     bool
+	links       []parser.Link
+	insertMode  bool
+	styledCache map[int]string
+	cacheValid  map[int]bool
 }
 
 var (
-	headerStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
-	boldStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255"))
-	italicStyle    = lipgloss.NewStyle().Italic(true).Foreground(lipgloss.Color("251"))
-	linkStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Underline(true)
-	codeStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Background(lipgloss.Color("236"))
-	tagStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("135"))
-	mathStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
-	bulletStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	blockquoteStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Italic(true)
-	cursorStyle    = lipgloss.NewStyle().Reverse(true)
-	lineNumStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Width(4)
+	headerStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
+	linkStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	codeStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	tagStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("135"))
+	mathStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
+	bulletStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	cursorStyle  = lipgloss.NewStyle().Reverse(true)
+	lineNumStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 )
 
 type SaveRequestMsg struct {
@@ -86,8 +47,10 @@ type LinkFollowMsg struct {
 
 func New() Model {
 	return Model{
-		lines:      []string{""},
-		insertMode: false,
+		lines:       []string{""},
+		insertMode:  false,
+		styledCache: make(map[int]string),
+		cacheValid:  make(map[int]bool),
 	}
 }
 
@@ -102,16 +65,13 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		if key.Matches(msg, DefaultKeyMap.Save) {
+		if msg.String() == "ctrl+s" {
 			return m, func() tea.Msg {
-				return SaveRequestMsg{
-					Path:    m.filePath,
-					Content: m.Content(),
-				}
+				return SaveRequestMsg{Path: m.filePath, Content: m.Content()}
 			}
 		}
 
-		if key.Matches(msg, DefaultKeyMap.NormalMode) {
+		if msg.String() == "esc" {
 			m.insertMode = false
 			return m, nil
 		}
@@ -123,18 +83,18 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			clickRow := msg.Y + m.offsetRow
-			if clickRow < len(m.lines) {
+			clickRow := msg.Y - 1 + m.offsetRow
+			if clickRow >= 0 && clickRow < len(m.lines) {
 				m.cursorRow = clickRow
-				lineLen := utf8.RuneCountInString(m.lines[m.cursorRow])
-				if msg.X-5 < lineLen {
-					m.cursorCol = msg.X - 5
-					if m.cursorCol < 0 {
-						m.cursorCol = 0
-					}
-				} else {
-					m.cursorCol = lineLen
+				col := msg.X - 5
+				if col < 0 {
+					col = 0
 				}
+				lineLen := utf8.RuneCountInString(m.lines[m.cursorRow])
+				if col > lineLen {
+					col = lineLen
+				}
+				m.cursorCol = col
 			}
 		}
 	}
@@ -143,119 +103,120 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 func (m Model) handleNormalMode(msg tea.KeyMsg) (Model, tea.Cmd) {
-	switch {
-	case key.Matches(msg, DefaultKeyMap.InsertMode):
+	switch msg.String() {
+	case "i":
 		m.insertMode = true
-		if msg.String() == "a" && m.cursorCol < utf8.RuneCountInString(m.currentLine()) {
+	case "a":
+		m.insertMode = true
+		if m.cursorCol < utf8.RuneCountInString(m.currentLine()) {
 			m.cursorCol++
 		}
-
-	case key.Matches(msg, DefaultKeyMap.Up):
-		m.moveCursorUp()
-	case key.Matches(msg, DefaultKeyMap.Down):
-		m.moveCursorDown()
-	case key.Matches(msg, DefaultKeyMap.Left):
-		m.moveCursorLeft()
-	case key.Matches(msg, DefaultKeyMap.Right):
-		m.moveCursorRight()
-	case key.Matches(msg, DefaultKeyMap.Home):
+	case "I":
+		m.insertMode = true
 		m.cursorCol = 0
-	case key.Matches(msg, DefaultKeyMap.End):
+	case "A":
+		m.insertMode = true
 		m.cursorCol = utf8.RuneCountInString(m.currentLine())
-	case key.Matches(msg, DefaultKeyMap.PageUp):
+	case "o":
+		m.insertLineBelow()
+		m.insertMode = true
+	case "O":
+		m.insertLineAbove()
+		m.insertMode = true
+	case "up", "k":
+		m.moveCursorUp()
+	case "down", "j":
+		m.moveCursorDown()
+	case "left", "h":
+		m.moveCursorLeft()
+	case "right", "l":
+		m.moveCursorRight()
+	case "home", "0":
+		m.cursorCol = 0
+	case "end", "$":
+		m.cursorCol = utf8.RuneCountInString(m.currentLine())
+	case "ctrl+u", "pgup":
 		for i := 0; i < m.height/2; i++ {
 			m.moveCursorUp()
 		}
-	case key.Matches(msg, DefaultKeyMap.PageDown):
+	case "ctrl+d", "pgdown":
 		for i := 0; i < m.height/2; i++ {
 			m.moveCursorDown()
 		}
-	case key.Matches(msg, DefaultKeyMap.FollowLink):
-		link := m.getLinkAtCursor()
-		if link != nil {
-			return m, func() tea.Msg {
-				return LinkFollowMsg{Target: link.Target}
-			}
-		}
-
-	case msg.String() == "w":
-		m.moveWordForward()
-	case msg.String() == "b":
-		m.moveWordBackward()
-	case msg.String() == "g":
-		m.cursorRow = 0
-		m.cursorCol = 0
-		m.offsetRow = 0
-	case msg.String() == "G":
+	case "g":
+		m.cursorRow, m.cursorCol, m.offsetRow = 0, 0, 0
+	case "G":
 		m.cursorRow = len(m.lines) - 1
 		m.cursorCol = 0
-	case msg.String() == "x":
+		m.ensureCursorVisible()
+	case "w":
+		m.moveWordForward()
+	case "b":
+		m.moveWordBackward()
+	case "x":
 		m.deleteChar()
-		m.modified = true
-	case msg.String() == "o":
-		m.insertLineBelow()
-		m.insertMode = true
-		m.modified = true
-	case msg.String() == "O":
-		m.insertLineAbove()
-		m.insertMode = true
-		m.modified = true
-	case msg.String() == "d":
-		// dd to delete line - simplified
+	case "enter", "ctrl+]":
+		if link := m.getLinkAtCursor(); link != nil {
+			return m, func() tea.Msg { return LinkFollowMsg{Target: link.Target} }
+		}
 	}
-
 	return m, nil
 }
 
 func (m Model) handleInsertMode(msg tea.KeyMsg) (Model, tea.Cmd) {
-	switch {
-	case key.Matches(msg, DefaultKeyMap.Up):
+	switch msg.String() {
+	case "up":
 		m.moveCursorUp()
-	case key.Matches(msg, DefaultKeyMap.Down):
+	case "down":
 		m.moveCursorDown()
-	case key.Matches(msg, DefaultKeyMap.Left):
+	case "left":
 		m.moveCursorLeft()
-	case key.Matches(msg, DefaultKeyMap.Right):
+	case "right":
 		m.moveCursorRight()
-	case key.Matches(msg, DefaultKeyMap.Enter):
+	case "enter":
 		m.insertNewline()
-		m.modified = true
-	case key.Matches(msg, DefaultKeyMap.Backspace):
+	case "backspace":
 		m.backspace()
-		m.modified = true
-	case key.Matches(msg, DefaultKeyMap.Delete):
+	case "delete":
 		m.deleteChar()
-		m.modified = true
+	case "home":
+		m.cursorCol = 0
+	case "end":
+		m.cursorCol = utf8.RuneCountInString(m.currentLine())
 	default:
 		if msg.Type == tea.KeyRunes {
 			m.insertRunes(msg.Runes)
-			m.modified = true
 		}
 	}
-
 	return m, nil
+}
+
+func (m *Model) invalidateCache(row int) {
+	m.cacheValid[row] = false
+}
+
+func (m *Model) invalidateAllCache() {
+	m.cacheValid = make(map[int]bool)
 }
 
 func (m *Model) moveCursorUp() {
 	if m.cursorRow > 0 {
 		m.cursorRow--
-		lineLen := utf8.RuneCountInString(m.lines[m.cursorRow])
-		if m.cursorCol > lineLen {
+		if lineLen := utf8.RuneCountInString(m.lines[m.cursorRow]); m.cursorCol > lineLen {
 			m.cursorCol = lineLen
 		}
+		m.ensureCursorVisible()
 	}
-	m.ensureCursorVisible()
 }
 
 func (m *Model) moveCursorDown() {
 	if m.cursorRow < len(m.lines)-1 {
 		m.cursorRow++
-		lineLen := utf8.RuneCountInString(m.lines[m.cursorRow])
-		if m.cursorCol > lineLen {
+		if lineLen := utf8.RuneCountInString(m.lines[m.cursorRow]); m.cursorCol > lineLen {
 			m.cursorCol = lineLen
 		}
+		m.ensureCursorVisible()
 	}
-	m.ensureCursorVisible()
 }
 
 func (m *Model) moveCursorLeft() {
@@ -278,18 +239,15 @@ func (m *Model) moveCursorRight() {
 }
 
 func (m *Model) moveWordForward() {
-	line := m.currentLine()
-	runes := []rune(line)
+	line := []rune(m.currentLine())
 	col := m.cursorCol
-
-	for col < len(runes) && !isWordChar(runes[col]) {
+	for col < len(line) && !isWordChar(line[col]) {
 		col++
 	}
-	for col < len(runes) && isWordChar(runes[col]) {
+	for col < len(line) && isWordChar(line[col]) {
 		col++
 	}
-
-	if col >= len(runes) && m.cursorRow < len(m.lines)-1 {
+	if col >= len(line) && m.cursorRow < len(m.lines)-1 {
 		m.cursorRow++
 		m.cursorCol = 0
 	} else {
@@ -303,21 +261,17 @@ func (m *Model) moveWordBackward() {
 		m.cursorCol = utf8.RuneCountInString(m.lines[m.cursorRow])
 		return
 	}
-
-	line := m.currentLine()
-	runes := []rune(line)
+	line := []rune(m.currentLine())
 	col := m.cursorCol
-
 	if col > 0 {
 		col--
 	}
-	for col > 0 && !isWordChar(runes[col]) {
+	for col > 0 && !isWordChar(line[col]) {
 		col--
 	}
-	for col > 0 && isWordChar(runes[col-1]) {
+	for col > 0 && isWordChar(line[col-1]) {
 		col--
 	}
-
 	m.cursorCol = col
 }
 
@@ -326,106 +280,86 @@ func isWordChar(r rune) bool {
 }
 
 func (m *Model) insertRunes(runes []rune) {
-	line := m.currentLine()
-	lineRunes := []rune(line)
-
-	newLine := make([]rune, 0, len(lineRunes)+len(runes))
-	newLine = append(newLine, lineRunes[:m.cursorCol]...)
+	line := []rune(m.currentLine())
+	newLine := make([]rune, 0, len(line)+len(runes))
+	newLine = append(newLine, line[:m.cursorCol]...)
 	newLine = append(newLine, runes...)
-	newLine = append(newLine, lineRunes[m.cursorCol:]...)
-
+	newLine = append(newLine, line[m.cursorCol:]...)
 	m.lines[m.cursorRow] = string(newLine)
 	m.cursorCol += len(runes)
+	m.modified = true
+	m.invalidateCache(m.cursorRow)
 }
 
 func (m *Model) insertNewline() {
-	line := m.currentLine()
-	runes := []rune(line)
-
-	before := string(runes[:m.cursorCol])
-	after := string(runes[m.cursorCol:])
-
+	line := []rune(m.currentLine())
+	before, after := string(line[:m.cursorCol]), string(line[m.cursorCol:])
 	m.lines[m.cursorRow] = before
-
-	newLines := make([]string, 0, len(m.lines)+1)
-	newLines = append(newLines, m.lines[:m.cursorRow+1]...)
-	newLines = append(newLines, after)
-	newLines = append(newLines, m.lines[m.cursorRow+1:]...)
-	m.lines = newLines
-
+	m.lines = append(m.lines[:m.cursorRow+1], append([]string{after}, m.lines[m.cursorRow+1:]...)...)
 	m.cursorRow++
 	m.cursorCol = 0
+	m.modified = true
+	m.invalidateAllCache()
 	m.ensureCursorVisible()
 }
 
 func (m *Model) backspace() {
 	if m.cursorCol > 0 {
-		line := m.currentLine()
-		runes := []rune(line)
-		newLine := string(runes[:m.cursorCol-1]) + string(runes[m.cursorCol:])
-		m.lines[m.cursorRow] = newLine
+		line := []rune(m.currentLine())
+		m.lines[m.cursorRow] = string(line[:m.cursorCol-1]) + string(line[m.cursorCol:])
 		m.cursorCol--
+		m.modified = true
+		m.invalidateCache(m.cursorRow)
 	} else if m.cursorRow > 0 {
 		prevLine := m.lines[m.cursorRow-1]
-		currLine := m.currentLine()
 		m.cursorCol = utf8.RuneCountInString(prevLine)
-		m.lines[m.cursorRow-1] = prevLine + currLine
-
-		newLines := make([]string, 0, len(m.lines)-1)
-		newLines = append(newLines, m.lines[:m.cursorRow]...)
-		newLines = append(newLines, m.lines[m.cursorRow+1:]...)
-		m.lines = newLines
-
+		m.lines[m.cursorRow-1] = prevLine + m.currentLine()
+		m.lines = append(m.lines[:m.cursorRow], m.lines[m.cursorRow+1:]...)
 		m.cursorRow--
+		m.modified = true
+		m.invalidateAllCache()
 	}
 }
 
 func (m *Model) deleteChar() {
-	line := m.currentLine()
-	runes := []rune(line)
-
-	if m.cursorCol < len(runes) {
-		newLine := string(runes[:m.cursorCol]) + string(runes[m.cursorCol+1:])
-		m.lines[m.cursorRow] = newLine
+	line := []rune(m.currentLine())
+	if m.cursorCol < len(line) {
+		m.lines[m.cursorRow] = string(line[:m.cursorCol]) + string(line[m.cursorCol+1:])
+		m.modified = true
+		m.invalidateCache(m.cursorRow)
 	} else if m.cursorRow < len(m.lines)-1 {
-		m.lines[m.cursorRow] = line + m.lines[m.cursorRow+1]
-		newLines := make([]string, 0, len(m.lines)-1)
-		newLines = append(newLines, m.lines[:m.cursorRow+1]...)
-		newLines = append(newLines, m.lines[m.cursorRow+2:]...)
-		m.lines = newLines
+		m.lines[m.cursorRow] = m.currentLine() + m.lines[m.cursorRow+1]
+		m.lines = append(m.lines[:m.cursorRow+1], m.lines[m.cursorRow+2:]...)
+		m.modified = true
+		m.invalidateAllCache()
 	}
 }
 
 func (m *Model) insertLineBelow() {
-	newLines := make([]string, 0, len(m.lines)+1)
-	newLines = append(newLines, m.lines[:m.cursorRow+1]...)
-	newLines = append(newLines, "")
-	newLines = append(newLines, m.lines[m.cursorRow+1:]...)
-	m.lines = newLines
+	m.lines = append(m.lines[:m.cursorRow+1], append([]string{""}, m.lines[m.cursorRow+1:]...)...)
 	m.cursorRow++
 	m.cursorCol = 0
+	m.modified = true
+	m.invalidateAllCache()
 	m.ensureCursorVisible()
 }
 
 func (m *Model) insertLineAbove() {
-	newLines := make([]string, 0, len(m.lines)+1)
-	newLines = append(newLines, m.lines[:m.cursorRow]...)
-	newLines = append(newLines, "")
-	newLines = append(newLines, m.lines[m.cursorRow:]...)
-	m.lines = newLines
+	m.lines = append(m.lines[:m.cursorRow], append([]string{""}, m.lines[m.cursorRow:]...)...)
 	m.cursorCol = 0
+	m.modified = true
+	m.invalidateAllCache()
 	m.ensureCursorVisible()
 }
 
 func (m *Model) ensureCursorVisible() {
-	if m.cursorRow < m.offsetRow {
-		m.offsetRow = m.cursorRow
-	}
-	visibleHeight := m.height - 3
+	visibleHeight := m.height - 2
 	if visibleHeight < 1 {
 		visibleHeight = 1
 	}
-	if m.cursorRow >= m.offsetRow+visibleHeight {
+	if m.cursorRow < m.offsetRow {
+		m.offsetRow = m.cursorRow
+	} else if m.cursorRow >= m.offsetRow+visibleHeight {
 		m.offsetRow = m.cursorRow - visibleHeight + 1
 	}
 }
@@ -439,111 +373,113 @@ func (m *Model) currentLine() string {
 
 func (m Model) View() string {
 	var b strings.Builder
+	b.Grow(m.width * m.height)
 
-	headerStr := "NORMAL"
-	headerBg := lipgloss.Color("57")
+	// Header
+	mode, bg := "NORMAL", "57"
 	if m.insertMode {
-		headerStr = "INSERT"
-		headerBg = lipgloss.Color("34")
+		mode, bg = "INSERT", "34"
 	}
-
-	modifiedStr := ""
+	mod := ""
 	if m.modified {
-		modifiedStr = " [+]"
+		mod = " [+]"
+	}
+	file := m.filePath
+	if file == "" {
+		file = "No file"
 	}
 
-	fileName := m.filePath
-	if fileName == "" {
-		fileName = "No file"
-	}
+	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("229")).Background(lipgloss.Color(bg)).Padding(0, 1).Render(mode + " | " + file + mod)
+	b.WriteString(header)
+	b.WriteByte('\n')
 
-	header := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("229")).
-		Background(headerBg).
-		Width(m.width).
-		Padding(0, 1).
-		Render(headerStr + " | " + fileName + modifiedStr)
-
-	b.WriteString(header + "\n")
-
-	visibleHeight := m.height - 3
+	// Lines
+	visibleHeight := m.height - 2
 	if visibleHeight < 1 {
 		visibleHeight = 1
 	}
 
-	for i := 0; i < visibleHeight && m.offsetRow+i < len(m.lines); i++ {
+	for i := 0; i < visibleHeight; i++ {
 		lineNum := m.offsetRow + i
+		if lineNum >= len(m.lines) {
+			b.WriteString(lineNumStyle.Render("~   "))
+			b.WriteByte('\n')
+			continue
+		}
+
+		// Line number
+		numStr := "    "
+		if lineNum < 9999 {
+			numStr = strings.Repeat(" ", 3-len(itoa(lineNum+1))) + itoa(lineNum+1) + " "
+		}
+		b.WriteString(lineNumStyle.Render(numStr))
+
+		// Line content
 		line := m.lines[lineNum]
-
-		lineNumStr := lineNumStyle.Render(strings.Repeat(" ", 3-len(string(rune('0'+lineNum%10)))) + string(rune('0'+(lineNum+1)%10)) + " ")
-
-		styledLine := m.renderLine(line, lineNum)
-
-		b.WriteString(lineNumStr + styledLine + "\n")
-	}
-
-	for i := len(m.lines) - m.offsetRow; i < visibleHeight; i++ {
-		b.WriteString(lineNumStyle.Render("~   ") + "\n")
+		if lineNum == m.cursorRow && m.focused {
+			b.WriteString(m.renderLineWithCursor(line))
+		} else {
+			b.WriteString(m.getStyledLine(lineNum, line))
+		}
+		b.WriteByte('\n')
 	}
 
 	return b.String()
 }
 
-func (m Model) renderLine(line string, lineNum int) string {
-	if line == "" {
-		if lineNum == m.cursorRow && m.focused {
-			return cursorStyle.Render(" ")
-		}
-		return ""
+func itoa(n int) string {
+	if n < 10 {
+		return string(rune('0' + n))
 	}
+	return itoa(n/10) + string(rune('0'+n%10))
+}
 
-	runes := []rune(line)
+func (m *Model) getStyledLine(lineNum int, line string) string {
+	if m.cacheValid[lineNum] {
+		return m.styledCache[lineNum]
+	}
 	styled := m.styleLine(line)
-
-	if lineNum == m.cursorRow && m.focused {
-		styledRunes := []rune(styled)
-		cursorPos := m.cursorCol
-		if cursorPos > len(runes) {
-			cursorPos = len(runes)
-		}
-
-		if cursorPos < len(runes) {
-			beforeCursor := string(runes[:cursorPos])
-			cursorChar := string(runes[cursorPos])
-			afterCursor := string(runes[cursorPos+1:])
-
-			beforeStyled := m.styleLine(beforeCursor)
-			cursorStyled := cursorStyle.Render(cursorChar)
-			afterStyled := m.styleLine(afterCursor)
-
-			return beforeStyled + cursorStyled + afterStyled
-		} else {
-			return string(styledRunes) + cursorStyle.Render(" ")
-		}
-	}
-
+	m.styledCache[lineNum] = styled
+	m.cacheValid[lineNum] = true
 	return styled
 }
 
+func (m Model) renderLineWithCursor(line string) string {
+	if line == "" {
+		return cursorStyle.Render(" ")
+	}
+
+	runes := []rune(line)
+	col := m.cursorCol
+	if col > len(runes) {
+		col = len(runes)
+	}
+
+	if col < len(runes) {
+		before := m.styleLine(string(runes[:col]))
+		cursor := cursorStyle.Render(string(runes[col]))
+		after := m.styleLine(string(runes[col+1:]))
+		return before + cursor + after
+	}
+	return m.styleLine(line) + cursorStyle.Render(" ")
+}
+
 func (m Model) styleLine(line string) string {
-	if strings.HasPrefix(line, "# ") {
+	if line == "" {
+		return ""
+	}
+
+	// Fast path for common cases
+	if line[0] == '#' {
 		return headerStyle.Render(line)
 	}
-	if strings.HasPrefix(line, "## ") || strings.HasPrefix(line, "### ") {
-		return headerStyle.Render(line)
+	if len(line) > 1 && line[0] == '>' && line[1] == ' ' {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render(line)
 	}
-	if strings.HasPrefix(line, "> ") {
-		return blockquoteStyle.Render(line)
-	}
-	if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") {
+	if len(line) > 1 && (line[0] == '-' || line[0] == '*') && line[1] == ' ' {
 		return bulletStyle.Render(line[:2]) + m.styleInline(line[2:])
 	}
-	if len(line) > 0 && line[0] >= '0' && line[0] <= '9' && strings.Contains(line, ". ") {
-		idx := strings.Index(line, ". ")
-		return bulletStyle.Render(line[:idx+2]) + m.styleInline(line[idx+2:])
-	}
-	if strings.HasPrefix(line, "```") {
+	if len(line) >= 3 && line[0] == '`' && line[1] == '`' && line[2] == '`' {
 		return codeStyle.Render(line)
 	}
 
@@ -551,45 +487,91 @@ func (m Model) styleLine(line string) string {
 }
 
 func (m Model) styleInline(text string) string {
-	result := text
-
-	result = styleBetween(result, "**", "**", boldStyle)
-	result = styleBetween(result, "__", "__", boldStyle)
-	result = styleBetween(result, "*", "*", italicStyle)
-	result = styleBetween(result, "_", "_", italicStyle)
-	result = styleBetween(result, "`", "`", codeStyle)
-	result = styleBetween(result, "[[", "]]", linkStyle)
-	result = styleBetween(result, "$", "$", mathStyle)
-
-	result = stylePattern(result, `#[a-zA-Z0-9_-]+`, tagStyle)
-
-	return result
-}
-
-func styleBetween(text, start, end string, style lipgloss.Style) string {
-	result := text
-	for {
-		startIdx := strings.Index(result, start)
-		if startIdx == -1 {
-			break
-		}
-		remaining := result[startIdx+len(start):]
-		endIdx := strings.Index(remaining, end)
-		if endIdx == -1 {
-			break
-		}
-
-		before := result[:startIdx]
-		content := remaining[:endIdx]
-		after := remaining[endIdx+len(end):]
-
-		result = before + style.Render(start+content+end) + after
+	if len(text) == 0 {
+		return ""
 	}
-	return result
+
+	// Quick check if any styling needed
+	if !strings.ContainsAny(text, "*_`[$#") {
+		return text
+	}
+
+	var result strings.Builder
+	result.Grow(len(text) * 2)
+	runes := []rune(text)
+	i := 0
+
+	for i < len(runes) {
+		// Wiki links [[...]]
+		if i+1 < len(runes) && runes[i] == '[' && runes[i+1] == '[' {
+			end := findClosing(runes, i+2, ']', ']')
+			if end != -1 {
+				result.WriteString(linkStyle.Render(string(runes[i : end+2])))
+				i = end + 2
+				continue
+			}
+		}
+
+		// Inline code `...`
+		if runes[i] == '`' {
+			end := findSingle(runes, i+1, '`')
+			if end != -1 {
+				result.WriteString(codeStyle.Render(string(runes[i : end+1])))
+				i = end + 1
+				continue
+			}
+		}
+
+		// Math $...$
+		if runes[i] == '$' {
+			end := findSingle(runes, i+1, '$')
+			if end != -1 {
+				result.WriteString(mathStyle.Render(string(runes[i : end+1])))
+				i = end + 1
+				continue
+			}
+		}
+
+		// Tags #tag
+		if runes[i] == '#' && (i == 0 || runes[i-1] == ' ') {
+			end := i + 1
+			for end < len(runes) && isTagChar(runes[end]) {
+				end++
+			}
+			if end > i+1 {
+				result.WriteString(tagStyle.Render(string(runes[i:end])))
+				i = end
+				continue
+			}
+		}
+
+		result.WriteRune(runes[i])
+		i++
+	}
+
+	return result.String()
 }
 
-func stylePattern(text, pattern string, style lipgloss.Style) string {
-	return text
+func findClosing(runes []rune, start int, c1, c2 rune) int {
+	for i := start; i < len(runes)-1; i++ {
+		if runes[i] == c1 && runes[i+1] == c2 {
+			return i
+		}
+	}
+	return -1
+}
+
+func findSingle(runes []rune, start int, c rune) int {
+	for i := start; i < len(runes); i++ {
+		if runes[i] == c {
+			return i
+		}
+	}
+	return -1
+}
+
+func isTagChar(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '/'
 }
 
 func (m *Model) SetContent(content string, filePath string) {
@@ -598,19 +580,15 @@ func (m *Model) SetContent(content string, filePath string) {
 		m.lines = []string{""}
 	}
 	m.filePath = filePath
-	m.cursorRow = 0
-	m.cursorCol = 0
-	m.offsetRow = 0
+	m.cursorRow, m.cursorCol, m.offsetRow = 0, 0, 0
 	m.modified = false
 	m.links = parser.ExtractAllLinks(content)
+	m.invalidateAllCache()
 }
 
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
-	if m.renderer == nil || m.width > 0 {
-		m.renderer, _ = parser.NewMarkdownRenderer(width - 6)
-	}
 }
 
 func (m *Model) SetFocused(focused bool) {
@@ -648,7 +626,6 @@ func (m *Model) getLinkAtCursor() *parser.Link {
 		pos += utf8.RuneCountInString(m.lines[i]) + 1
 	}
 	pos += m.cursorCol
-
 	return parser.FindLinkAtPosition(content, pos)
 }
 
