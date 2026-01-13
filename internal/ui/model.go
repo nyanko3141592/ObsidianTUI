@@ -3,6 +3,7 @@ package ui
 import (
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
@@ -10,10 +11,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/takahashinaoki/obsidiantui/config"
 	"github.com/takahashinaoki/obsidiantui/internal/components/backlinks"
+	"github.com/takahashinaoki/obsidiantui/internal/components/cmdpalette"
 	"github.com/takahashinaoki/obsidiantui/internal/components/filetree"
+	"github.com/takahashinaoki/obsidiantui/internal/components/graph"
 	"github.com/takahashinaoki/obsidiantui/internal/components/liveeditor"
+	"github.com/takahashinaoki/obsidiantui/internal/components/outline"
 	"github.com/takahashinaoki/obsidiantui/internal/components/preview"
 	"github.com/takahashinaoki/obsidiantui/internal/components/search"
+	"github.com/takahashinaoki/obsidiantui/internal/components/tagpane"
 	"github.com/takahashinaoki/obsidiantui/internal/vault"
 )
 
@@ -40,7 +45,11 @@ type Model struct {
 	preview   preview.Model
 	search    search.Model
 	backlinks backlinks.Model
-	help      help.Model
+	graph     graph.Model
+	tagpane   tagpane.Model
+	outline    outline.Model
+	cmdpalette cmdpalette.Model
+	help       help.Model
 	keys      KeyMap
 
 	activePane    Pane
@@ -62,6 +71,10 @@ func NewModel(v *vault.Vault) Model {
 	pv := preview.New()
 	sr := search.New(v)
 	bl := backlinks.New(v)
+	gr := graph.New(v)
+	tp := tagpane.New(v)
+	ol := outline.New()
+	cp := cmdpalette.New()
 	h := help.New()
 	h.ShowAll = false
 
@@ -72,11 +85,15 @@ func NewModel(v *vault.Vault) Model {
 		preview:    pv,
 		search:     sr,
 		backlinks:  bl,
+		graph:      gr,
+		tagpane:    tp,
+		outline:    ol,
+		cmdpalette: cp,
 		help:       h,
 		keys:       DefaultKeyMap(),
 		activePane: PaneFileTree,
 		viewMode:   ViewEdit,
-		statusMsg:  "Press ? for help | i:insert mode | Tab:switch pane",
+		statusMsg:  "Press ? for help | C-g:graph | Tab:switch pane",
 	}
 }
 
@@ -95,6 +112,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.cmdpalette.Active() {
+			var cmd tea.Cmd
+			m.cmdpalette, cmd = m.cmdpalette.Update(msg)
+			return m, cmd
+		}
+
 		if m.search.Active() {
 			var cmd tea.Cmd
 			m.search, cmd = m.search.Update(msg)
@@ -104,6 +127,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.backlinks.Active() {
 			var cmd tea.Cmd
 			m.backlinks, cmd = m.backlinks.Update(msg)
+			return m, cmd
+		}
+
+		if m.graph.Active() {
+			var cmd tea.Cmd
+			m.graph, cmd = m.graph.Update(msg)
+			return m, cmd
+		}
+
+		if m.tagpane.Active() {
+			var cmd tea.Cmd
+			m.tagpane, cmd = m.tagpane.Update(msg)
+			return m, cmd
+		}
+
+		if m.outline.Active() {
+			var cmd tea.Cmd
+			m.outline, cmd = m.outline.Update(msg)
 			return m, cmd
 		}
 
@@ -125,6 +166,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showHelp = !m.showHelp
 			m.help.ShowAll = m.showHelp
 			return m, nil
+
+		case key.Matches(msg, m.keys.CmdPalette):
+			m.cmdpalette.SetSize(m.width/2, m.height*3/4)
+			return m, m.cmdpalette.Show()
 
 		case key.Matches(msg, m.keys.FocusNext):
 			m.cycleFocus(1)
@@ -156,6 +201,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.backlinks.Show(m.currentFile)
 			}
 			return m, nil
+
+		case key.Matches(msg, m.keys.Graph):
+			m.graph.SetSize(m.width*3/4, m.height*3/4)
+			m.graph.Show(m.currentFile)
+			return m, nil
+
+		case key.Matches(msg, m.keys.Tags):
+			m.tagpane.SetSize(m.width/2, m.height*3/4)
+			m.tagpane.Show()
+			return m, nil
+
+		case key.Matches(msg, m.keys.Outline):
+			if m.currentFile != "" {
+				m.outline.SetSize(m.width/2, m.height*3/4)
+				content := m.editor.Content()
+				m.outline.SetContent(content, m.currentFile)
+				m.outline.Show()
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keys.DailyNote):
+			return m, m.openDailyNote()
 
 		case key.Matches(msg, m.keys.ToggleView):
 			m.cycleViewMode()
@@ -192,7 +259,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.updateActivePane(msg)
 
 	case tea.MouseMsg:
-		if m.search.Active() || m.backlinks.Active() {
+		if m.search.Active() || m.backlinks.Active() || m.graph.Active() || m.tagpane.Active() || m.outline.Active() || m.cmdpalette.Active() {
 			return m, nil
 		}
 		return m, m.handleMouseClick(msg)
@@ -210,6 +277,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.openFile(msg.Path)
 
 	case backlinks.BacklinksClosedMsg:
+		return m, nil
+
+	case graph.FileSelectedMsg:
+		return m, m.openFile(msg.Path)
+
+	case graph.GraphClosedMsg:
+		return m, nil
+
+	case tagpane.FileSelectedMsg:
+		return m, m.openFile(msg.Path)
+
+	case tagpane.TagPaneClosedMsg:
+		return m, nil
+
+	case outline.JumpToLineMsg:
+		m.editor.JumpToLine(msg.Line)
+		m.setActivePane(PaneEditor)
+		return m, nil
+
+	case outline.OutlineClosedMsg:
+		return m, nil
+
+	case cmdpalette.CommandMsg:
+		return m, m.executeCommand(msg.ID)
+
+	case cmdpalette.PaletteClosedMsg:
 		return m, nil
 
 	case liveeditor.SaveRequestMsg:
@@ -258,6 +351,26 @@ func (m Model) View() string {
 
 	if m.backlinks.Active() {
 		overlay := m.backlinks.View()
+		mainContent = m.overlayCenter(mainContent, overlay)
+	}
+
+	if m.graph.Active() {
+		overlay := m.graph.View()
+		mainContent = m.overlayCenter(mainContent, overlay)
+	}
+
+	if m.tagpane.Active() {
+		overlay := m.tagpane.View()
+		mainContent = m.overlayCenter(mainContent, overlay)
+	}
+
+	if m.outline.Active() {
+		overlay := m.outline.View()
+		mainContent = m.overlayCenter(mainContent, overlay)
+	}
+
+	if m.cmdpalette.Active() {
+		overlay := m.cmdpalette.View()
 		mainContent = m.overlayCenter(mainContent, overlay)
 	}
 
@@ -664,4 +777,94 @@ func (m *Model) followLink(target string) tea.Cmd {
 	}
 
 	return m.openFile(resolved)
+}
+
+func (m *Model) openDailyNote() tea.Cmd {
+	// Generate daily note filename (YYYY-MM-DD.md)
+	today := time.Now().Format("2006-01-02")
+	dailyPath := today + ".md"
+
+	// Check if daily folder exists in vault
+	dailyFolder := "Daily"
+	if _, exists := m.vault.Files[dailyFolder]; exists {
+		dailyPath = dailyFolder + "/" + today + ".md"
+	}
+
+	return func() tea.Msg {
+		// Check if file exists
+		content, err := m.vault.ReadFile(dailyPath)
+		if err == nil {
+			// File exists, open it
+			m.historyStack = append(m.historyStack, dailyPath)
+			config.AppConfig.LastOpenFile = dailyPath
+			config.Save()
+			return fileOpenedMsg{path: dailyPath, content: content}
+		}
+
+		// Create new daily note
+		template := "# " + today + "\n\n"
+		if err := m.vault.CreateFile(dailyPath); err != nil {
+			return errMsg{err: err}
+		}
+		if err := m.vault.WriteFile(dailyPath, template); err != nil {
+			return errMsg{err: err}
+		}
+
+		m.historyStack = append(m.historyStack, dailyPath)
+		config.AppConfig.LastOpenFile = dailyPath
+		config.Save()
+
+		return fileOpenedMsg{path: dailyPath, content: template}
+	}
+}
+
+func (m *Model) executeCommand(id string) tea.Cmd {
+	switch id {
+	case "search":
+		m.search.SetSize(m.width/2, m.height/2)
+		return m.search.Activate()
+	case "graph":
+		m.graph.SetSize(m.width*3/4, m.height*3/4)
+		m.graph.Show(m.currentFile)
+	case "tags":
+		m.tagpane.SetSize(m.width/2, m.height*3/4)
+		m.tagpane.Show()
+	case "outline":
+		if m.currentFile != "" {
+			m.outline.SetSize(m.width/2, m.height*3/4)
+			m.outline.SetContent(m.editor.Content(), m.currentFile)
+			m.outline.Show()
+		}
+	case "backlinks":
+		if m.currentFile != "" {
+			m.backlinks.SetSize(m.width/2, m.height/2)
+			m.backlinks.Show(m.currentFile)
+		}
+	case "daily":
+		return m.openDailyNote()
+	case "save":
+		return m.saveCurrentFile()
+	case "refresh":
+		m.filetree.Refresh()
+		m.statusMsg = "Vault refreshed"
+	case "newfile":
+		// TODO: implement new file dialog
+		m.statusMsg = "New file: use Ctrl+N"
+	case "help":
+		m.showHelp = !m.showHelp
+		m.help.ShowAll = m.showHelp
+	case "edit":
+		m.viewMode = ViewEdit
+		m.updateLayout()
+	case "preview":
+		m.viewMode = ViewPreview
+		m.updateLayout()
+	case "split":
+		m.viewMode = ViewSplit
+		m.updateLayout()
+	case "toggle":
+		m.cycleViewMode()
+		m.updateLayout()
+	}
+	return nil
 }

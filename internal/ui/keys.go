@@ -5,12 +5,17 @@ import "github.com/charmbracelet/bubbles/key"
 type KeyMap struct {
 	Quit       key.Binding
 	Help       key.Binding
+	CmdPalette key.Binding
 	FocusNext  key.Binding
 	FocusPrev  key.Binding
 	FocusTree  key.Binding
 	FocusEdit  key.Binding
 	Search     key.Binding
 	Backlinks  key.Binding
+	Graph      key.Binding
+	Tags       key.Binding
+	Outline    key.Binding
+	DailyNote  key.Binding
 	Save       key.Binding
 	NewFile    key.Binding
 	Delete     key.Binding
@@ -30,8 +35,12 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("C-c", "quit"),
 		),
 		Help: key.NewBinding(
-			key.WithKeys("?", "f1"),
-			key.WithHelp("?/F1", "help"),
+			key.WithKeys("?"),
+			key.WithHelp("?", "help"),
+		),
+		CmdPalette: key.NewBinding(
+			key.WithKeys("f1", "ctrl+shift+p"),
+			key.WithHelp("F1", "commands"),
 		),
 		FocusNext: key.NewBinding(
 			key.WithKeys("tab"),
@@ -56,6 +65,22 @@ func DefaultKeyMap() KeyMap {
 		Backlinks: key.NewBinding(
 			key.WithKeys("ctrl+b"),
 			key.WithHelp("C-b", "backlinks"),
+		),
+		Graph: key.NewBinding(
+			key.WithKeys("ctrl+g"),
+			key.WithHelp("C-g", "graph"),
+		),
+		Tags: key.NewBinding(
+			key.WithKeys("ctrl+t"),
+			key.WithHelp("C-t", "tags"),
+		),
+		Outline: key.NewBinding(
+			key.WithKeys("ctrl+l"),
+			key.WithHelp("C-l", "outline"),
+		),
+		DailyNote: key.NewBinding(
+			key.WithKeys("alt+d"),
+			key.WithHelp("M-d", "daily"),
 		),
 		Save: key.NewBinding(
 			key.WithKeys("ctrl+s"),
@@ -101,14 +126,14 @@ func DefaultKeyMap() KeyMap {
 }
 
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Help, k.Search, k.Save, k.ToggleView, k.Quit}
+	return []key.Binding{k.CmdPalette, k.Search, k.Save, k.ToggleView, k.Quit}
 }
 
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.FocusNext, k.FocusPrev, k.FocusTree, k.FocusEdit},
 		{k.ToggleView, k.ViewEdit, k.ViewPrev, k.ViewSplit},
-		{k.Search, k.Backlinks, k.FollowLink, k.GoBack},
-		{k.Save, k.NewFile, k.Refresh, k.Quit},
+		{k.Search, k.Backlinks, k.Graph, k.Tags},
+		{k.Outline, k.DailyNote, k.FollowLink, k.GoBack},
 	}
 }

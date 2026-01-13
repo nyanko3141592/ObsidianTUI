@@ -384,6 +384,19 @@ func (m *Model) ensureCursorVisible() {
 	}
 }
 
+// JumpToLine moves the cursor to the specified line (0-indexed)
+func (m *Model) JumpToLine(line int) {
+	if line < 0 {
+		line = 0
+	}
+	if line >= len(m.lines) {
+		line = len(m.lines) - 1
+	}
+	m.cursorRow = line
+	m.cursorCol = 0
+	m.ensureCursorVisible()
+}
+
 func (m *Model) currentLine() string {
 	if m.cursorRow < len(m.lines) {
 		return m.lines[m.cursorRow]
