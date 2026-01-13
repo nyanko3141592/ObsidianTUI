@@ -13,8 +13,9 @@ type MarkdownRenderer struct {
 
 func NewMarkdownRenderer(width int) (*MarkdownRenderer, error) {
 	renderer, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
+		glamour.WithStylePath("dark"),
 		glamour.WithWordWrap(width),
+		glamour.WithEmoji(),
 	)
 	if err != nil {
 		return nil, err

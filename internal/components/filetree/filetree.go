@@ -5,10 +5,17 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/takahashinaoki/obsidiantui/internal/vault"
+)
+
+var (
+	selectedFocusedStyle   = lipgloss.NewStyle().Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230"))
+	selectedUnfocusedStyle = lipgloss.NewStyle().Background(lipgloss.Color("240")).Foreground(lipgloss.Color("255"))
+	dirStyle               = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	defaultStyle           = lipgloss.NewStyle()
+	indentStrings          = []string{"", "  ", "    ", "      ", "        ", "          ", "            ", "              ", "                ", "                  "}
 )
 
 type Node struct {
@@ -30,24 +37,6 @@ type Model struct {
 	height       int
 	focused      bool
 	selectedPath string
-}
-
-type KeyMap struct {
-	Up       key.Binding
-	Down     key.Binding
-	Enter    key.Binding
-	Toggle   key.Binding
-	PageUp   key.Binding
-	PageDown key.Binding
-}
-
-var DefaultKeyMap = KeyMap{
-	Up:       key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "up")),
-	Down:     key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "down")),
-	Enter:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
-	Toggle:   key.NewBinding(key.WithKeys("tab", "l", "h"), key.WithHelp("tab", "toggle")),
-	PageUp:   key.NewBinding(key.WithKeys("pgup", "ctrl+u"), key.WithHelp("pgup", "page up")),
-	PageDown: key.NewBinding(key.WithKeys("pgdown", "ctrl+d"), key.WithHelp("pgdown", "page down")),
 }
 
 type FileSelectedMsg struct {
@@ -137,7 +126,7 @@ func sortNodes(node *Node) {
 }
 
 func (m *Model) flattenTree() {
-	m.FlatNodes = nil
+	m.FlatNodes = m.FlatNodes[:0]
 	m.flattenNode(m.Root)
 }
 
@@ -162,16 +151,16 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch {
-		case key.Matches(msg, DefaultKeyMap.Up):
+		switch msg.String() {
+		case "up", "k":
 			if m.Cursor > 0 {
 				m.Cursor--
 			}
-		case key.Matches(msg, DefaultKeyMap.Down):
+		case "down", "j":
 			if m.Cursor < len(m.FlatNodes)-1 {
 				m.Cursor++
 			}
-		case key.Matches(msg, DefaultKeyMap.Enter):
+		case "enter":
 			if m.Cursor < len(m.FlatNodes) {
 				node := m.FlatNodes[m.Cursor]
 				if node.IsDir {
@@ -184,7 +173,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 					}
 				}
 			}
-		case key.Matches(msg, DefaultKeyMap.Toggle):
+		case "tab", "l", "h":
 			if m.Cursor < len(m.FlatNodes) {
 				node := m.FlatNodes[m.Cursor]
 				if node.IsDir {
@@ -192,12 +181,12 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 					m.flattenTree()
 				}
 			}
-		case key.Matches(msg, DefaultKeyMap.PageUp):
+		case "pgup", "ctrl+u":
 			m.Cursor -= m.height / 2
 			if m.Cursor < 0 {
 				m.Cursor = 0
 			}
-		case key.Matches(msg, DefaultKeyMap.PageDown):
+		case "pgdown", "ctrl+d":
 			m.Cursor += m.height / 2
 			if m.Cursor >= len(m.FlatNodes) {
 				m.Cursor = len(m.FlatNodes) - 1
@@ -205,17 +194,45 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 
 	case tea.MouseMsg:
-		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			if msg.Y >= 0 && msg.Y < len(m.FlatNodes) && msg.Y < m.height {
-				m.Cursor = msg.Y
-				node := m.FlatNodes[m.Cursor]
-				if node.IsDir {
-					node.Expanded = !node.Expanded
-					m.flattenTree()
-				} else {
-					m.selectedPath = node.Path
-					return m, func() tea.Msg {
-						return FileSelectedMsg{Path: node.Path}
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			m.Cursor -= 3
+			if m.Cursor < 0 {
+				m.Cursor = 0
+			}
+		case tea.MouseButtonWheelDown:
+			m.Cursor += 3
+			if m.Cursor >= len(m.FlatNodes) {
+				m.Cursor = len(m.FlatNodes) - 1
+			}
+		case tea.MouseButtonLeft:
+			if msg.Action == tea.MouseActionPress {
+				// Calculate scroll offset same as View()
+				start := 0
+				if m.height > 0 && len(m.FlatNodes) > m.height {
+					if m.Cursor >= m.height/2 {
+						start = m.Cursor - m.height/2
+					}
+					if start+m.height > len(m.FlatNodes) {
+						start = len(m.FlatNodes) - m.height
+						if start < 0 {
+							start = 0
+						}
+					}
+				}
+
+				clickedIndex := msg.Y + start
+				if clickedIndex >= 0 && clickedIndex < len(m.FlatNodes) {
+					m.Cursor = clickedIndex
+					node := m.FlatNodes[m.Cursor]
+					if node.IsDir {
+						node.Expanded = !node.Expanded
+						m.flattenTree()
+					} else {
+						m.selectedPath = node.Path
+						return m, func() tea.Msg {
+							return FileSelectedMsg{Path: node.Path}
+						}
 					}
 				}
 			}
@@ -227,6 +244,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 func (m Model) View() string {
 	var b strings.Builder
+	b.Grow(m.width * m.height)
 
 	start := 0
 	end := len(m.FlatNodes)
@@ -247,55 +265,56 @@ func (m Model) View() string {
 
 	for i := start; i < end && i < len(m.FlatNodes); i++ {
 		node := m.FlatNodes[i]
-		line := m.renderNode(node, i == m.Cursor)
-		b.WriteString(line)
-		if i < end-1 {
-			b.WriteString("\n")
-		}
+		m.renderNode(&b, node, i == m.Cursor)
+		b.WriteByte('\n')
 	}
 
 	return b.String()
 }
 
-func (m Model) renderNode(node *Node, selected bool) string {
-	indent := strings.Repeat("  ", node.Depth)
+func (m Model) renderNode(b *strings.Builder, node *Node, selected bool) {
+	// Cached indent
+	if node.Depth < len(indentStrings) {
+		b.WriteString(indentStrings[node.Depth])
+	} else {
+		for i := 0; i < node.Depth; i++ {
+			b.WriteString("  ")
+		}
+	}
 
-	var icon string
+	// Icon
 	if node.IsDir {
 		if node.Expanded {
-			icon = "▼ "
+			b.WriteString("▼ ")
 		} else {
-			icon = "▶ "
+			b.WriteString("▶ ")
 		}
 	} else {
-		icon = "  "
+		b.WriteString("  ")
 	}
 
+	// Name (with truncation if needed)
 	name := node.Name
-	if len(name) > m.width-len(indent)-4 && m.width > 0 {
-		name = name[:m.width-len(indent)-7] + "..."
+	maxLen := m.width - node.Depth*2 - 4
+	if maxLen > 0 && len(name) > maxLen {
+		name = name[:maxLen-3] + "..."
 	}
 
-	line := indent + icon + name
-
-	style := lipgloss.NewStyle()
+	// Apply style using cached styles
+	var style lipgloss.Style
 	if selected {
 		if m.focused {
-			style = style.Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230"))
+			style = selectedFocusedStyle
 		} else {
-			style = style.Background(lipgloss.Color("240")).Foreground(lipgloss.Color("255"))
+			style = selectedUnfocusedStyle
 		}
 	} else if node.IsDir {
-		style = style.Foreground(lipgloss.Color("39"))
-	}
-
-	if m.width > 0 {
-		line = style.Width(m.width).Render(line)
+		style = dirStyle
 	} else {
-		line = style.Render(line)
+		style = defaultStyle
 	}
 
-	return line
+	b.WriteString(style.Render(name))
 }
 
 func (m *Model) SetSize(width, height int) {

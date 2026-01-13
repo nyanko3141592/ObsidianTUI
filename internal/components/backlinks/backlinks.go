@@ -9,6 +9,28 @@ import (
 	"github.com/takahashinaoki/obsidiantui/internal/vault"
 )
 
+var (
+	backlinksTitleStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("229")).
+				Background(lipgloss.Color("135")).
+				Padding(0, 1)
+	backlinksSubtitleStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("245")).
+				Italic(true)
+	backlinksSelectedStyle = lipgloss.NewStyle().
+				Background(lipgloss.Color("62")).
+				Foreground(lipgloss.Color("230"))
+	backlinksLinkStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	backlinksNormalStyle   = lipgloss.NewStyle()
+	backlinksMoreStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	backlinksNoLinksStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	backlinksContainerBase = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("135")).
+				Padding(1)
+)
+
 type Model struct {
 	backlinks []string
 	cursor    int
@@ -110,18 +132,8 @@ func (m Model) View() string {
 
 	var b strings.Builder
 
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("135")).
-		Padding(0, 1)
-
-	b.WriteString(titleStyle.Render("Backlinks") + "\n")
-
-	subtitleStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("245")).
-		Italic(true)
-	b.WriteString(subtitleStyle.Render("Files linking to: "+m.filePath) + "\n\n")
+	b.WriteString(backlinksTitleStyle.Render("Backlinks") + "\n")
+	b.WriteString(backlinksSubtitleStyle.Render("Files linking to: "+m.filePath) + "\n\n")
 
 	if len(m.backlinks) > 0 {
 		maxItems := m.height - 6
@@ -131,13 +143,12 @@ func (m Model) View() string {
 
 		for i := 0; i < maxItems; i++ {
 			link := m.backlinks[i]
-			style := lipgloss.NewStyle()
+			var style lipgloss.Style
 
 			if i == m.cursor {
-				style = style.Background(lipgloss.Color("62")).
-					Foreground(lipgloss.Color("230"))
+				style = backlinksSelectedStyle
 			} else {
-				style = style.Foreground(lipgloss.Color("39"))
+				style = backlinksLinkStyle
 			}
 
 			displayLink := link
@@ -149,21 +160,13 @@ func (m Model) View() string {
 		}
 
 		if len(m.backlinks) > maxItems {
-			moreStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-			b.WriteString(moreStyle.Render("  ... and more"))
+			b.WriteString(backlinksMoreStyle.Render("  ... and more"))
 		}
 	} else {
-		noLinksStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-		b.WriteString(noLinksStyle.Render("  No backlinks found"))
+		b.WriteString(backlinksNoLinksStyle.Render("  No backlinks found"))
 	}
 
-	containerStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("135")).
-		Padding(1).
-		Width(m.width)
-
-	return containerStyle.Render(b.String())
+	return backlinksContainerBase.Width(m.width).Render(b.String())
 }
 
 func (m *Model) SetSize(width, height int) {

@@ -1,6 +1,7 @@
 package liveeditor
 
 import (
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -26,15 +27,20 @@ type Model struct {
 }
 
 var (
-	headerStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
-	linkStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
-	codeStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	tagStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("135"))
-	mathStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
-	bulletStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	cursorStyle  = lipgloss.NewStyle().Reverse(true)
-	lineNumStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	headerStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
+	linkStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	codeStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	tagStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("135"))
+	mathStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
+	bulletStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	blockquoteStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	cursorStyle     = lipgloss.NewStyle().Reverse(true)
+	lineNumStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	normalHeader    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57")).Padding(0, 1)
+	insertHeader    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("229")).Background(lipgloss.Color("34")).Padding(0, 1)
 )
+
+var indentCache = make([]string, 20)
 
 type SaveRequestMsg struct {
 	Path    string
@@ -82,19 +88,33 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m.handleInsertMode(msg)
 
 	case tea.MouseMsg:
-		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			clickRow := msg.Y - 1 + m.offsetRow
-			if clickRow >= 0 && clickRow < len(m.lines) {
-				m.cursorRow = clickRow
-				col := msg.X - 5
-				if col < 0 {
-					col = 0
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			for i := 0; i < 3; i++ {
+				m.moveCursorUp()
+			}
+		case tea.MouseButtonWheelDown:
+			for i := 0; i < 3; i++ {
+				m.moveCursorDown()
+			}
+		case tea.MouseButtonLeft:
+			if msg.Action == tea.MouseActionPress {
+				// Y=0 is header, Y=1+ are content lines
+				clickRow := msg.Y - 1 + m.offsetRow
+				if clickRow >= 0 && clickRow < len(m.lines) {
+					m.cursorRow = clickRow
+					// X: subtract line number width (4 digits + 1 space = 5)
+					col := msg.X - 5
+					if col < 0 {
+						col = 0
+					}
+					lineLen := utf8.RuneCountInString(m.lines[m.cursorRow])
+					if col > lineLen {
+						col = lineLen
+					}
+					m.cursorCol = col
+					m.ensureCursorVisible()
 				}
-				lineLen := utf8.RuneCountInString(m.lines[m.cursorRow])
-				if col > lineLen {
-					col = lineLen
-				}
-				m.cursorCol = col
 			}
 		}
 	}
@@ -375,11 +395,7 @@ func (m Model) View() string {
 	var b strings.Builder
 	b.Grow(m.width * m.height)
 
-	// Header
-	mode, bg := "NORMAL", "57"
-	if m.insertMode {
-		mode, bg = "INSERT", "34"
-	}
+	// Header - use cached styles
 	mod := ""
 	if m.modified {
 		mod = " [+]"
@@ -389,8 +405,11 @@ func (m Model) View() string {
 		file = "No file"
 	}
 
-	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("229")).Background(lipgloss.Color(bg)).Padding(0, 1).Render(mode + " | " + file + mod)
-	b.WriteString(header)
+	if m.insertMode {
+		b.WriteString(insertHeader.Render("INSERT | " + file + mod))
+	} else {
+		b.WriteString(normalHeader.Render("NORMAL | " + file + mod))
+	}
 	b.WriteByte('\n')
 
 	// Lines
@@ -402,17 +421,25 @@ func (m Model) View() string {
 	for i := 0; i < visibleHeight; i++ {
 		lineNum := m.offsetRow + i
 		if lineNum >= len(m.lines) {
-			b.WriteString(lineNumStyle.Render("~   "))
-			b.WriteByte('\n')
+			b.WriteString("~   \n")
 			continue
 		}
 
-		// Line number
-		numStr := "    "
-		if lineNum < 9999 {
-			numStr = strings.Repeat(" ", 3-len(itoa(lineNum+1))) + itoa(lineNum+1) + " "
+		// Line number - use strconv
+		n := lineNum + 1
+		if n < 10 {
+			b.WriteString("   ")
+			b.WriteString(strconv.Itoa(n))
+		} else if n < 100 {
+			b.WriteString("  ")
+			b.WriteString(strconv.Itoa(n))
+		} else if n < 1000 {
+			b.WriteByte(' ')
+			b.WriteString(strconv.Itoa(n))
+		} else {
+			b.WriteString(strconv.Itoa(n))
 		}
-		b.WriteString(lineNumStyle.Render(numStr))
+		b.WriteByte(' ')
 
 		// Line content
 		line := m.lines[lineNum]
@@ -425,13 +452,6 @@ func (m Model) View() string {
 	}
 
 	return b.String()
-}
-
-func itoa(n int) string {
-	if n < 10 {
-		return string(rune('0' + n))
-	}
-	return itoa(n/10) + string(rune('0'+n%10))
 }
 
 func (m *Model) getStyledLine(lineNum int, line string) string {
@@ -474,7 +494,7 @@ func (m Model) styleLine(line string) string {
 		return headerStyle.Render(line)
 	}
 	if len(line) > 1 && line[0] == '>' && line[1] == ' ' {
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render(line)
+		return blockquoteStyle.Render(line)
 	}
 	if len(line) > 1 && (line[0] == '-' || line[0] == '*') && line[1] == ' ' {
 		return bulletStyle.Render(line[:2]) + m.styleInline(line[2:])

@@ -43,14 +43,16 @@ type Model struct {
 	help      help.Model
 	keys      KeyMap
 
-	activePane   Pane
-	viewMode     ViewMode
-	width        int
-	height       int
-	showHelp     bool
-	statusMsg    string
-	currentFile  string
-	historyStack []string
+	activePane    Pane
+	viewMode      ViewMode
+	width         int
+	height        int
+	showHelp      bool
+	statusMsg     string
+	currentFile   string
+	historyStack  []string
+	cachedTreeW   int
+	cachedContentW int
 }
 
 func NewModel(v *vault.Vault) Model {
@@ -114,7 +116,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			if m.editor.Modified() {
-				m.statusMsg = "Unsaved changes! Press ctrl+s to save or ctrl+c again to quit"
+				m.statusMsg = "Unsaved changes! C-s:save C-c:force quit"
 			} else {
 				return m, tea.Quit
 			}
@@ -130,6 +132,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keys.FocusPrev):
 			m.cycleFocus(-1)
+			return m, nil
+
+		case key.Matches(msg, m.keys.FocusTree):
+			m.setActivePane(PaneFileTree)
+			return m, nil
+
+		case key.Matches(msg, m.keys.FocusEdit):
+			if m.viewMode == ViewPreview {
+				m.setActivePane(PanePreview)
+			} else {
+				m.setActivePane(PaneEditor)
+			}
 			return m, nil
 
 		case key.Matches(msg, m.keys.Search):
@@ -148,6 +162,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateLayout()
 			return m, nil
 
+		case key.Matches(msg, m.keys.ViewEdit):
+			m.viewMode = ViewEdit
+			m.updateLayout()
+			return m, nil
+
+		case key.Matches(msg, m.keys.ViewPrev):
+			m.viewMode = ViewPreview
+			m.updateLayout()
+			return m, nil
+
+		case key.Matches(msg, m.keys.ViewSplit):
+			m.viewMode = ViewSplit
+			m.updateLayout()
+			return m, nil
+
 		case key.Matches(msg, m.keys.Save):
 			return m, m.saveCurrentFile()
 
@@ -155,6 +184,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.filetree.Refresh()
 			m.statusMsg = "Vault refreshed"
 			return m, nil
+
+		case key.Matches(msg, m.keys.GoBack):
+			return m, m.goBack()
 		}
 
 		return m, m.updateActivePane(msg)
@@ -264,6 +296,9 @@ func (m *Model) updateLayout() {
 		contentWidth = 20
 	}
 
+	m.cachedTreeW = treeWidth
+	m.cachedContentW = contentWidth
+
 	m.filetree.SetSize(treeWidth, contentHeight)
 
 	switch m.viewMode {
@@ -308,6 +343,33 @@ func (m *Model) cycleFocus(direction int) {
 	m.preview.SetFocused(m.activePane == PanePreview)
 }
 
+func (m *Model) setActivePane(pane Pane) {
+	m.activePane = pane
+	m.filetree.SetFocused(pane == PaneFileTree)
+	m.editor.SetFocused(pane == PaneEditor)
+	m.preview.SetFocused(pane == PanePreview)
+}
+
+func (m *Model) goBack() tea.Cmd {
+	if len(m.historyStack) > 1 {
+		m.historyStack = m.historyStack[:len(m.historyStack)-1]
+		prevFile := m.historyStack[len(m.historyStack)-1]
+		return m.openFileWithoutHistory(prevFile)
+	}
+	m.statusMsg = "No history"
+	return nil
+}
+
+func (m *Model) openFileWithoutHistory(path string) tea.Cmd {
+	return func() tea.Msg {
+		content, err := m.vault.ReadFile(path)
+		if err != nil {
+			return errMsg{err: err}
+		}
+		return fileOpenedMsg{path: path, content: content}
+	}
+}
+
 func (m *Model) cycleViewMode() {
 	switch m.viewMode {
 	case ViewEdit:
@@ -345,67 +407,81 @@ func (m *Model) updateActivePane(msg tea.Msg) tea.Cmd {
 }
 
 func (m *Model) handleMouseClick(msg tea.MouseMsg) tea.Cmd {
-	if msg.Action != tea.MouseActionPress {
-		return nil
-	}
-
-	treeWidth := m.width / 4
-	if treeWidth < 20 {
-		treeWidth = 20
-	}
-	if treeWidth > 40 {
-		treeWidth = 40
-	}
-
-	if msg.X < treeWidth {
-		m.activePane = PaneFileTree
-		m.filetree.SetFocused(true)
-		m.editor.SetFocused(false)
-		m.preview.SetFocused(false)
-
-		var cmd tea.Cmd
-		m.filetree, cmd = m.filetree.Update(msg)
-		return cmd
-	}
-
-	contentWidth := m.width - treeWidth - 2
-	relX := msg.X - treeWidth - 1
-
-	switch m.viewMode {
-	case ViewEdit:
-		m.activePane = PaneEditor
-	case ViewPreview:
-		m.activePane = PanePreview
-	case ViewSplit:
-		if relX < contentWidth/2 {
-			m.activePane = PaneEditor
+	// Handle focus change only on press
+	if msg.Action == tea.MouseActionPress {
+		if msg.X < m.cachedTreeW+1 {
+			m.activePane = PaneFileTree
+			m.filetree.SetFocused(true)
+			m.editor.SetFocused(false)
+			m.preview.SetFocused(false)
 		} else {
-			m.activePane = PanePreview
+			relX := msg.X - m.cachedTreeW - 2
+
+			switch m.viewMode {
+			case ViewEdit:
+				m.activePane = PaneEditor
+			case ViewPreview:
+				m.activePane = PanePreview
+			case ViewSplit:
+				if relX < m.cachedContentW/2 {
+					m.activePane = PaneEditor
+				} else {
+					m.activePane = PanePreview
+				}
+			}
+
+			m.filetree.SetFocused(m.activePane == PaneFileTree)
+			m.editor.SetFocused(m.activePane == PaneEditor)
+			m.preview.SetFocused(m.activePane == PanePreview)
 		}
 	}
 
-	m.filetree.SetFocused(m.activePane == PaneFileTree)
-	m.editor.SetFocused(m.activePane == PaneEditor)
-	m.preview.SetFocused(m.activePane == PanePreview)
+	// Create adjusted mouse message for each pane
+	adjustedMsg := msg
+	switch m.activePane {
+	case PaneFileTree:
+		// Adjust for border (1 pixel)
+		adjustedMsg.X = msg.X - 1
+		adjustedMsg.Y = msg.Y - 1
+	case PaneEditor:
+		// Adjust for tree width + borders
+		adjustedMsg.X = msg.X - m.cachedTreeW - 2
+		adjustedMsg.Y = msg.Y - 1
+	case PanePreview:
+		// Adjust for tree width + editor (in split) + borders
+		if m.viewMode == ViewSplit {
+			adjustedMsg.X = msg.X - m.cachedTreeW - m.cachedContentW/2 - 3
+		} else {
+			adjustedMsg.X = msg.X - m.cachedTreeW - 2
+		}
+		adjustedMsg.Y = msg.Y - 1
+	}
 
-	return m.updateActivePane(msg)
+	return m.updateActivePaneWithMsg(adjustedMsg)
+}
+
+func (m *Model) updateActivePaneWithMsg(msg tea.Msg) tea.Cmd {
+	var cmd tea.Cmd
+
+	switch m.activePane {
+	case PaneFileTree:
+		m.filetree, cmd = m.filetree.Update(msg)
+	case PaneEditor:
+		m.editor, cmd = m.editor.Update(msg)
+	case PanePreview:
+		m.preview, cmd = m.preview.Update(msg)
+	}
+
+	return cmd
 }
 
 func (m Model) renderMainContent() string {
-	treeWidth := m.width / 4
-	if treeWidth < 20 {
-		treeWidth = 20
-	}
-	if treeWidth > 40 {
-		treeWidth = 40
-	}
-
 	treeBorder := BorderInactiveStyle
 	if m.activePane == PaneFileTree {
 		treeBorder = BorderActiveStyle
 	}
 
-	treeView := treeBorder.Width(treeWidth).Render(m.filetree.View())
+	treeView := treeBorder.Width(m.cachedTreeW).Render(m.filetree.View())
 
 	var contentView string
 	switch m.viewMode {
@@ -429,6 +505,7 @@ func (m Model) renderStatusBar() string {
 
 	left := StatusBarStyle.Render(" " + vaultName)
 
+	// Mode and view
 	modeStr := "NORMAL"
 	if m.editor.InsertMode() {
 		modeStr = "INSERT"
@@ -444,9 +521,29 @@ func (m Model) renderStatusBar() string {
 		viewStr = "Split"
 	}
 
-	center := StatusBarStyle.Render(modeStr + " | " + viewStr)
+	// Contextual keybindings hint
+	var hints string
+	if m.editor.InsertMode() {
+		hints = "Esc:normal"
+	} else {
+		switch m.activePane {
+		case PaneFileTree:
+			hints = "Enter:open j/k:nav /:search"
+		case PaneEditor:
+			hints = "i:insert /:search C-e:view gd:link"
+		case PanePreview:
+			hints = "j/k:scroll Enter:link C-e:view"
+		}
+	}
 
-	right := StatusBarStyle.Render(m.statusMsg + " ")
+	center := StatusBarStyle.Render(modeStr + " | " + viewStr + " | " + hints)
+
+	// Right side: status message or modified indicator
+	rightMsg := m.statusMsg
+	if m.editor.Modified() && rightMsg == "" {
+		rightMsg = "[modified]"
+	}
+	right := StatusBarStyle.Render(rightMsg + " ")
 
 	leftWidth := lipgloss.Width(left)
 	centerWidth := lipgloss.Width(center)

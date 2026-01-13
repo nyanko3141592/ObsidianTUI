@@ -11,6 +11,21 @@ import (
 	"github.com/takahashinaoki/obsidiantui/internal/parser"
 )
 
+var (
+	previewHeaderBase = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("229")).
+				Background(lipgloss.Color("63")).
+				Padding(0, 1)
+	previewFocusedBorder = lipgloss.NewStyle().
+				BorderStyle(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("62"))
+	previewUnfocusedBorder = lipgloss.NewStyle().
+				BorderStyle(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("240"))
+	previewScrollStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+)
+
 type Model struct {
 	viewport     viewport.Model
 	content      string
@@ -55,6 +70,7 @@ type LinkFollowMsg struct {
 func New() Model {
 	vp := viewport.New(80, 20)
 	vp.Style = lipgloss.NewStyle()
+	vp.MouseWheelEnabled = true
 
 	return Model{
 		viewport:     vp,
@@ -71,27 +87,34 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 	}
 
-	var cmds []tea.Cmd
+	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, DefaultKeyMap.Up):
 			m.viewport.LineUp(1)
+			return m, nil
 		case key.Matches(msg, DefaultKeyMap.Down):
 			m.viewport.LineDown(1)
+			return m, nil
 		case key.Matches(msg, DefaultKeyMap.PageUp):
 			m.viewport.HalfViewUp()
+			return m, nil
 		case key.Matches(msg, DefaultKeyMap.PageDown):
 			m.viewport.HalfViewDown()
+			return m, nil
 		case key.Matches(msg, DefaultKeyMap.Top):
 			m.viewport.GotoTop()
+			return m, nil
 		case key.Matches(msg, DefaultKeyMap.Bottom):
 			m.viewport.GotoBottom()
+			return m, nil
 		case key.Matches(msg, DefaultKeyMap.NextLink):
 			if len(m.links) > 0 {
 				m.selectedLink = (m.selectedLink + 1) % len(m.links)
 			}
+			return m, nil
 		case key.Matches(msg, DefaultKeyMap.PrevLink):
 			if len(m.links) > 0 {
 				m.selectedLink--
@@ -99,6 +122,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 					m.selectedLink = len(m.links) - 1
 				}
 			}
+			return m, nil
 		case key.Matches(msg, DefaultKeyMap.FollowLink):
 			if m.selectedLink >= 0 && m.selectedLink < len(m.links) {
 				link := m.links[m.selectedLink]
@@ -106,25 +130,28 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 					return LinkFollowMsg{Target: link.Target}
 				}
 			}
+			return m, nil
 		}
 
 	case tea.MouseMsg:
-		var cmd tea.Cmd
+		// Handle mouse wheel directly
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			m.viewport.LineUp(3)
+			return m, nil
+		case tea.MouseButtonWheelDown:
+			m.viewport.LineDown(3)
+			return m, nil
+		}
+		// Let viewport handle other mouse events
 		m.viewport, cmd = m.viewport.Update(msg)
-		cmds = append(cmds, cmd)
+		return m, cmd
 	}
 
-	return m, tea.Batch(cmds...)
+	return m, nil
 }
 
 func (m Model) View() string {
-	headerStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("63")).
-		Width(m.width).
-		Padding(0, 1)
-
 	fileName := m.filePath
 	if fileName == "" {
 		fileName = "No file"
@@ -138,22 +165,18 @@ func (m Model) View() string {
 		}
 	}
 
-	header := headerStyle.Render("PREVIEW | " + fileName + linkInfo)
+	header := previewHeaderBase.Width(m.width).Render("PREVIEW | " + fileName + linkInfo)
 
-	viewportStyle := lipgloss.NewStyle()
+	var viewportStyle lipgloss.Style
 	if m.focused {
-		viewportStyle = viewportStyle.BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("62"))
+		viewportStyle = previewFocusedBorder
 	} else {
-		viewportStyle = viewportStyle.BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("240"))
+		viewportStyle = previewUnfocusedBorder
 	}
 
 	content := viewportStyle.Render(m.viewport.View())
 
-	scrollInfo := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240")).
-		Render(fmt.Sprintf(" %.0f%%", m.viewport.ScrollPercent()*100))
+	scrollInfo := previewScrollStyle.Render(fmt.Sprintf(" %.0f%%", m.viewport.ScrollPercent()*100))
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, content, scrollInfo)
 }
@@ -164,25 +187,31 @@ func (m *Model) SetContent(content string, filePath string) {
 	m.links = parser.ExtractWikiLinks(content)
 	m.selectedLink = -1
 
-	if m.renderer == nil {
-		var err error
-		m.renderer, err = parser.NewMarkdownRenderer(m.width - 4)
-		if err != nil {
-			m.rendered = content
-		}
-	}
-
-	if m.renderer != nil {
-		rendered, err := m.renderer.Render(content)
-		if err != nil {
-			m.rendered = content
-		} else {
-			m.rendered = rendered
-		}
-	}
-
-	m.viewport.SetContent(m.rendered)
+	m.renderContent()
 	m.viewport.GotoTop()
+}
+
+func (m *Model) renderContent() {
+	width := m.width - 4
+	if width < 40 {
+		width = 40
+	}
+
+	var err error
+	m.renderer, err = parser.NewMarkdownRenderer(width)
+	if err != nil {
+		m.rendered = m.content
+		m.viewport.SetContent(m.rendered)
+		return
+	}
+
+	rendered, err := m.renderer.Render(m.content)
+	if err != nil {
+		m.rendered = m.content
+	} else {
+		m.rendered = rendered
+	}
+	m.viewport.SetContent(m.rendered)
 }
 
 func (m *Model) SetSize(width, height int) {
@@ -191,15 +220,8 @@ func (m *Model) SetSize(width, height int) {
 	m.viewport.Width = width - 4
 	m.viewport.Height = height - 6
 
-	if m.renderer != nil && m.content != "" {
-		m.renderer, _ = parser.NewMarkdownRenderer(width - 4)
-		if m.renderer != nil {
-			rendered, err := m.renderer.Render(m.content)
-			if err == nil {
-				m.rendered = rendered
-				m.viewport.SetContent(m.rendered)
-			}
-		}
+	if m.content != "" {
+		m.renderContent()
 	}
 }
 

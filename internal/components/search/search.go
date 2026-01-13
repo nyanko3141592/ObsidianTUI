@@ -10,6 +10,28 @@ import (
 	"github.com/takahashinaoki/obsidiantui/internal/vault"
 )
 
+var (
+	searchTitleStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("229")).
+				Background(lipgloss.Color("57")).
+				Padding(0, 1)
+	searchInputStyle = lipgloss.NewStyle().
+				BorderStyle(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("62")).
+				Padding(0, 1)
+	searchSelectedStyle = lipgloss.NewStyle().
+				Background(lipgloss.Color("62")).
+				Foreground(lipgloss.Color("230"))
+	searchNormalStyle   = lipgloss.NewStyle()
+	searchMoreStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	searchNoResultStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	searchContainerBase = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("62")).
+				Padding(1)
+)
+
 type Model struct {
 	textinput textinput.Model
 	results   []string
@@ -122,20 +144,8 @@ func (m Model) View() string {
 
 	var b strings.Builder
 
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57")).
-		Padding(0, 1)
-
-	b.WriteString(titleStyle.Render("Search") + "\n")
-
-	inputStyle := lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("62")).
-		Padding(0, 1)
-
-	b.WriteString(inputStyle.Render(m.textinput.View()) + "\n")
+	b.WriteString(searchTitleStyle.Render("Search") + "\n")
+	b.WriteString(searchInputStyle.Render(m.textinput.View()) + "\n")
 
 	if len(m.results) > 0 {
 		b.WriteString("\n")
@@ -146,11 +156,12 @@ func (m Model) View() string {
 
 		for i := 0; i < maxResults; i++ {
 			result := m.results[i]
-			style := lipgloss.NewStyle()
+			var style lipgloss.Style
 
 			if i == m.cursor {
-				style = style.Background(lipgloss.Color("62")).
-					Foreground(lipgloss.Color("230"))
+				style = searchSelectedStyle
+			} else {
+				style = searchNormalStyle
 			}
 
 			if len(result) > m.width-4 {
@@ -161,21 +172,13 @@ func (m Model) View() string {
 		}
 
 		if len(m.results) > maxResults {
-			moreStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-			b.WriteString(moreStyle.Render("  ... and more"))
+			b.WriteString(searchMoreStyle.Render("  ... and more"))
 		}
 	} else if m.textinput.Value() != "" {
-		noResultStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-		b.WriteString(noResultStyle.Render("  No results found"))
+		b.WriteString(searchNoResultStyle.Render("  No results found"))
 	}
 
-	containerStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("62")).
-		Padding(1).
-		Width(m.width)
-
-	return containerStyle.Render(b.String())
+	return searchContainerBase.Width(m.width).Render(b.String())
 }
 
 func (m *Model) SetSize(width, height int) {
