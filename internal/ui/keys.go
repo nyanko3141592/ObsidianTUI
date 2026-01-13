@@ -10,9 +10,10 @@ type KeyMap struct {
 	FocusPrev  key.Binding
 	FocusTree  key.Binding
 	FocusEdit  key.Binding
-	Search     key.Binding
-	Backlinks  key.Binding
-	Graph      key.Binding
+	Search       key.Binding
+	Backlinks    key.Binding
+	ForwardLinks key.Binding
+	Graph        key.Binding
 	Tags       key.Binding
 	Outline    key.Binding
 	DailyNote  key.Binding
@@ -65,6 +66,10 @@ func DefaultKeyMap() KeyMap {
 		Backlinks: key.NewBinding(
 			key.WithKeys("ctrl+b"),
 			key.WithHelp("C-b", "backlinks"),
+		),
+		ForwardLinks: key.NewBinding(
+			key.WithKeys("alt+f"),
+			key.WithHelp("M-f", "fwd links"),
 		),
 		Graph: key.NewBinding(
 			key.WithKeys("ctrl+g"),

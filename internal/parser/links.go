@@ -8,6 +8,7 @@ import (
 var (
 	wikiLinkPattern     = regexp.MustCompile(`\[\[([^\]|]+)(?:\|([^\]]+))?\]\]`)
 	markdownLinkPattern = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+	embedLinkPattern    = regexp.MustCompile(`!\[\[([^\]|]+)(?:\|([^\]]+))?\]\]`)
 )
 
 type Link struct {
@@ -95,4 +96,38 @@ func FindLinkAtPosition(content string, pos int) *Link {
 		}
 	}
 	return nil
+}
+
+// EmbedLink represents an embedded note reference
+type EmbedLink struct {
+	Target   string
+	AltText  string
+	StartPos int
+	EndPos   int
+}
+
+// ExtractEmbedLinks finds all ![[note]] style embeds in content
+func ExtractEmbedLinks(content string) []EmbedLink {
+	var embeds []EmbedLink
+	matches := embedLinkPattern.FindAllStringSubmatchIndex(content, -1)
+
+	for _, match := range matches {
+		if len(match) >= 4 {
+			target := content[match[2]:match[3]]
+			altText := ""
+
+			if match[4] != -1 && match[5] != -1 {
+				altText = content[match[4]:match[5]]
+			}
+
+			embeds = append(embeds, EmbedLink{
+				Target:   target,
+				AltText:  altText,
+				StartPos: match[0],
+				EndPos:   match[1],
+			})
+		}
+	}
+
+	return embeds
 }

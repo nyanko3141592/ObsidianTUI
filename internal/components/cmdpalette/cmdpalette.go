@@ -64,6 +64,7 @@ func defaultCommands() []Command {
 		{ID: "tags", Name: "Tags", Description: "Browse all tags", Key: "C-t"},
 		{ID: "outline", Name: "Outline", Description: "View document outline", Key: "C-l"},
 		{ID: "backlinks", Name: "Backlinks", Description: "Show files linking to current", Key: "C-b"},
+		{ID: "forwardlinks", Name: "Forward Links", Description: "Show files linked from current", Key: "M-f"},
 		{ID: "daily", Name: "Daily Note", Description: "Open today's daily note", Key: "M-d"},
 		{ID: "save", Name: "Save File", Description: "Save current file", Key: "C-s"},
 		{ID: "refresh", Name: "Refresh Vault", Description: "Rescan vault files", Key: "C-r"},

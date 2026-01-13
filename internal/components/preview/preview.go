@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/takahashinaoki/obsidiantui/internal/parser"
+	"github.com/takahashinaoki/obsidiantui/internal/vault"
 )
 
 var (
@@ -24,6 +25,19 @@ var (
 				BorderStyle(lipgloss.RoundedBorder()).
 				BorderForeground(lipgloss.Color("240"))
 	previewScrollStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	embedHeaderStyle   = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("229")).
+				Background(lipgloss.Color("57")).
+				Padding(0, 1)
+	embedBorderStyle = lipgloss.NewStyle().
+				BorderStyle(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("57")).
+				Padding(0, 1).
+				MarginLeft(2)
+	embedErrorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("196")).
+			Italic(true)
 )
 
 type Model struct {
@@ -37,6 +51,8 @@ type Model struct {
 	renderer     *parser.MarkdownRenderer
 	links        []parser.Link
 	selectedLink int
+	vault        *vault.Vault
+	maxEmbedDepth int
 }
 
 type KeyMap struct {
@@ -73,9 +89,14 @@ func New() Model {
 	vp.MouseWheelEnabled = true
 
 	return Model{
-		viewport:     vp,
-		selectedLink: -1,
+		viewport:      vp,
+		selectedLink:  -1,
+		maxEmbedDepth: 3, // prevent infinite recursion
 	}
+}
+
+func (m *Model) SetVault(v *vault.Vault) {
+	m.vault = v
 }
 
 func (m Model) Init() tea.Cmd {
@@ -197,17 +218,20 @@ func (m *Model) renderContent() {
 		width = 40
 	}
 
+	// Expand embedded notes before rendering
+	contentWithEmbeds := m.expandEmbeds(m.content, 0, make(map[string]bool))
+
 	var err error
 	m.renderer, err = parser.NewMarkdownRenderer(width)
 	if err != nil {
-		m.rendered = m.content
+		m.rendered = contentWithEmbeds
 		m.viewport.SetContent(m.rendered)
 		return
 	}
 
-	rendered, err := m.renderer.Render(m.content)
+	rendered, err := m.renderer.Render(contentWithEmbeds)
 	if err != nil {
-		m.rendered = m.content
+		m.rendered = contentWithEmbeds
 	} else {
 		m.rendered = rendered
 	}
@@ -257,4 +281,72 @@ func (m *Model) ScrollToLine(line int) {
 	if line < len(lines) {
 		m.viewport.SetYOffset(line)
 	}
+}
+
+// expandEmbeds replaces ![[note]] with the embedded note content
+func (m *Model) expandEmbeds(content string, depth int, seen map[string]bool) string {
+	if m.vault == nil || depth >= m.maxEmbedDepth {
+		return content
+	}
+
+	embeds := parser.ExtractEmbedLinks(content)
+	if len(embeds) == 0 {
+		return content
+	}
+
+	// Process embeds from end to start to preserve positions
+	result := content
+	for i := len(embeds) - 1; i >= 0; i-- {
+		embed := embeds[i]
+
+		// Try to resolve the embed target
+		target := embed.Target
+		resolvedPath := m.vault.FindFile(target + ".md")
+		if resolvedPath == "" {
+			resolvedPath = m.vault.FindFile(target)
+		}
+
+		var replacement string
+		if resolvedPath == "" {
+			// Broken embed
+			replacement = fmt.Sprintf("\n> **⚠ Embed not found: %s**\n", target)
+		} else if seen[resolvedPath] {
+			// Circular reference
+			replacement = fmt.Sprintf("\n> **⚠ Circular embed: %s**\n", target)
+		} else {
+			// Read the embedded file
+			file, ok := m.vault.Files[resolvedPath]
+			if !ok || file.Content == "" {
+				replacement = fmt.Sprintf("\n> **⚠ Cannot read: %s**\n", target)
+			} else {
+				// Mark as seen to prevent cycles
+				seen[resolvedPath] = true
+
+				// Recursively expand embeds in the embedded content
+				embeddedContent := m.expandEmbeds(file.Content, depth+1, seen)
+
+				// Format with visual indicator
+				displayName := target
+				if embed.AltText != "" {
+					displayName = embed.AltText
+				}
+
+				// Create a blockquote-style embed
+				lines := strings.Split(embeddedContent, "\n")
+				var quotedLines []string
+				quotedLines = append(quotedLines, fmt.Sprintf("\n---\n**📎 %s**\n", displayName))
+				for _, line := range lines {
+					quotedLines = append(quotedLines, "> "+line)
+				}
+				quotedLines = append(quotedLines, "\n---\n")
+
+				replacement = strings.Join(quotedLines, "\n")
+			}
+		}
+
+		// Replace the embed with the replacement text
+		result = result[:embed.StartPos] + replacement + result[embed.EndPos:]
+	}
+
+	return result
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/takahashinaoki/obsidiantui/internal/components/backlinks"
 	"github.com/takahashinaoki/obsidiantui/internal/components/cmdpalette"
 	"github.com/takahashinaoki/obsidiantui/internal/components/filetree"
+	"github.com/takahashinaoki/obsidiantui/internal/components/forwardlinks"
 	"github.com/takahashinaoki/obsidiantui/internal/components/graph"
 	"github.com/takahashinaoki/obsidiantui/internal/components/liveeditor"
 	"github.com/takahashinaoki/obsidiantui/internal/components/outline"
@@ -43,9 +44,10 @@ type Model struct {
 	filetree  filetree.Model
 	editor    liveeditor.Model
 	preview   preview.Model
-	search    search.Model
-	backlinks backlinks.Model
-	graph     graph.Model
+	search       search.Model
+	backlinks    backlinks.Model
+	forwardlinks forwardlinks.Model
+	graph        graph.Model
 	tagpane   tagpane.Model
 	outline    outline.Model
 	cmdpalette cmdpalette.Model
@@ -69,8 +71,10 @@ func NewModel(v *vault.Vault) Model {
 	ft.SetFocused(true)
 	ed := liveeditor.New()
 	pv := preview.New()
+	pv.SetVault(v)
 	sr := search.New(v)
 	bl := backlinks.New(v)
+	fl := forwardlinks.New(v)
 	gr := graph.New(v)
 	tp := tagpane.New(v)
 	ol := outline.New()
@@ -79,17 +83,18 @@ func NewModel(v *vault.Vault) Model {
 	h.ShowAll = false
 
 	return Model{
-		vault:      v,
-		filetree:   ft,
-		editor:     ed,
-		preview:    pv,
-		search:     sr,
-		backlinks:  bl,
-		graph:      gr,
-		tagpane:    tp,
-		outline:    ol,
-		cmdpalette: cp,
-		help:       h,
+		vault:        v,
+		filetree:     ft,
+		editor:       ed,
+		preview:      pv,
+		search:       sr,
+		backlinks:    bl,
+		forwardlinks: fl,
+		graph:        gr,
+		tagpane:      tp,
+		outline:      ol,
+		cmdpalette:   cp,
+		help:         h,
 		keys:       DefaultKeyMap(),
 		activePane: PaneFileTree,
 		viewMode:   ViewEdit,
@@ -127,6 +132,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.backlinks.Active() {
 			var cmd tea.Cmd
 			m.backlinks, cmd = m.backlinks.Update(msg)
+			return m, cmd
+		}
+
+		if m.forwardlinks.Active() {
+			var cmd tea.Cmd
+			m.forwardlinks, cmd = m.forwardlinks.Update(msg)
 			return m, cmd
 		}
 
@@ -202,6 +213,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case key.Matches(msg, m.keys.ForwardLinks):
+			if m.currentFile != "" {
+				m.forwardlinks.SetSize(m.width/2, m.height/2)
+				m.forwardlinks.Show(m.currentFile)
+			}
+			return m, nil
+
 		case key.Matches(msg, m.keys.Graph):
 			m.graph.SetSize(m.width*3/4, m.height*3/4)
 			m.graph.Show(m.currentFile)
@@ -259,7 +277,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.updateActivePane(msg)
 
 	case tea.MouseMsg:
-		if m.search.Active() || m.backlinks.Active() || m.graph.Active() || m.tagpane.Active() || m.outline.Active() || m.cmdpalette.Active() {
+		if m.search.Active() || m.backlinks.Active() || m.forwardlinks.Active() || m.graph.Active() || m.tagpane.Active() || m.outline.Active() || m.cmdpalette.Active() {
 			return m, nil
 		}
 		return m, m.handleMouseClick(msg)
@@ -277,6 +295,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.openFile(msg.Path)
 
 	case backlinks.BacklinksClosedMsg:
+		return m, nil
+
+	case forwardlinks.FileSelectedMsg:
+		return m, m.openFile(msg.Path)
+
+	case forwardlinks.ForwardLinksClosedMsg:
 		return m, nil
 
 	case graph.FileSelectedMsg:
@@ -351,6 +375,11 @@ func (m Model) View() string {
 
 	if m.backlinks.Active() {
 		overlay := m.backlinks.View()
+		mainContent = m.overlayCenter(mainContent, overlay)
+	}
+
+	if m.forwardlinks.Active() {
+		overlay := m.forwardlinks.View()
 		mainContent = m.overlayCenter(mainContent, overlay)
 	}
 
@@ -839,6 +868,11 @@ func (m *Model) executeCommand(id string) tea.Cmd {
 		if m.currentFile != "" {
 			m.backlinks.SetSize(m.width/2, m.height/2)
 			m.backlinks.Show(m.currentFile)
+		}
+	case "forwardlinks":
+		if m.currentFile != "" {
+			m.forwardlinks.SetSize(m.width/2, m.height/2)
+			m.forwardlinks.Show(m.currentFile)
 		}
 	case "daily":
 		return m.openDailyNote()
